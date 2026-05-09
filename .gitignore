@@ -1,0 +1,30 @@
+# Build output
+output/
+build/
+*.o
+*.a
+*.so
+*.bin
+*.elf
+*.dtb
+*.ko
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Archives
+*.tar
+*.tar.gz
+*.zip
+*.rar
+
+# Nested git repos
+lv_port_pc_vscode/
+
+# Misc
+.DS_Store
+*.log
