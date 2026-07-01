@@ -36,20 +36,19 @@ static AI_VQE_CONFIG_S stAiVqeConfig, stAiVqeConfig2;
 
 static AUDIO_SOUND_MODE_E sound_mode(int ch)
 {
-    switch (ch)
-    {
-    case 1:
-        return AUDIO_SOUND_MODE_MONO;
-    case 2:
-        return AUDIO_SOUND_MODE_STEREO;
-    case 4:
-        return AUDIO_SOUND_MODE_4_CHN;
-    case 6:
-        return AUDIO_SOUND_MODE_6_CHN;
-    case 8:
-        return AUDIO_SOUND_MODE_8_CHN;
-    default:
-        return AUDIO_SOUND_MODE_BUTT;
+    switch (ch) {
+        case 1:
+            return AUDIO_SOUND_MODE_MONO;
+        case 2:
+            return AUDIO_SOUND_MODE_STEREO;
+        case 4:
+            return AUDIO_SOUND_MODE_4_CHN;
+        case 6:
+            return AUDIO_SOUND_MODE_6_CHN;
+        case 8:
+            return AUDIO_SOUND_MODE_8_CHN;
+        default:
+            return AUDIO_SOUND_MODE_BUTT;
     }
 }
 
@@ -74,15 +73,13 @@ int ai_init(void)
     aiAttr.u32ChnCnt = 4;
 
     result = RK_MPI_AI_SetPubAttr(aiDevId, &aiAttr);
-    if (result != 0)
-    {
+    if (result != 0) {
         RK_LOGE("ai set attr fail, reason = %x", result);
         return -1;
     }
 
     result = RK_MPI_AI_Enable(aiDevId);
-    if (result != 0)
-    {
+    if (result != 0) {
         RK_LOGE("ai enable fail, reason = %x", result);
         return -1;
     }
@@ -95,8 +92,7 @@ int ai_init(void)
     pstParams.s32UsrFrmDepth = 1;
 #endif
     result = RK_MPI_AI_SetChnParam(aiDevId, aiChn, &pstParams);
-    if (result != RK_SUCCESS)
-    {
+    if (result != RK_SUCCESS) {
         RK_LOGE("ai set channel params, aiChn = %d", aiChn);
         goto ai_chn_err;
     }
@@ -113,31 +109,27 @@ int ai_init(void)
     stAiVqeConfig.s64RecChannelType = 0x3;      // 0b0011
     stAiVqeConfig.s64ChannelLayoutType = 0xf;   // 0b1111
     result = RK_MPI_AI_SetVqeAttr(aiDevId, aiVqeChn, 0, 0, &stAiVqeConfig);
-    if (result != RK_SUCCESS)
-    {
+    if (result != RK_SUCCESS) {
         RK_LOGE("%s: SetVqeAttr(%d,%d) failed with %#x",
                 __func__, aiDevId, aiVqeChn, result);
         goto vqe_err;
     }
 
     result = RK_MPI_AI_GetVqeAttr(aiDevId, aiVqeChn, &stAiVqeConfig2);
-    if (result != RK_SUCCESS)
-    {
+    if (result != RK_SUCCESS) {
         RK_LOGE("%s: SetVqeAttr(%d,%d) failed with %#x",
                 __func__, aiDevId, aiChn, result);
         goto vqe_err;
     }
 
     result = memcmp(&stAiVqeConfig, &stAiVqeConfig2, sizeof(AI_VQE_CONFIG_S));
-    if (result != RK_SUCCESS)
-    {
+    if (result != RK_SUCCESS) {
         RK_LOGE("%s: set/get vqe config is different: %x", __func__, result);
         goto vqe_err;
     }
 
     result = RK_MPI_AI_EnableVqe(aiDevId, aiVqeChn);
-    if (result != RK_SUCCESS)
-    {
+    if (result != RK_SUCCESS) {
         RK_LOGE("%s: EnableVqe(%d,%d) failed with %#x",
                 __func__, aiDevId, aiVqeChn, result);
         goto vqe_err;
@@ -145,8 +137,7 @@ int ai_init(void)
 #endif
 
     result = RK_MPI_AI_EnableChn(aiDevId, aiChn);
-    if (result != 0)
-    {
+    if (result != 0) {
         RK_LOGE("ai enable channel fail, aiChn = %d, reason = %x", aiChn, result);
         goto ai_chn_err;
     }
@@ -162,8 +153,7 @@ int ai_init(void)
     aeAttr.u32Depth = aeAttr.u32BufCount;
 
     result = RK_MPI_AENC_CreateChn(aeChn, &aeAttr);
-    if (result)
-    {
+    if (result) {
         RK_LOGE("create aenc chn %d err:0x%x\n", aeChn, result);
         goto aenc_err;
     }
@@ -176,8 +166,7 @@ int ai_init(void)
     aencBindAttr.s32ChnId = aeChn;
 
     result = RK_MPI_SYS_Bind(&aiBindAttr, &aencBindAttr);
-    if (result)
-    {
+    if (result) {
         RK_LOGE("bind ai aenc failed:0x%x\n", result);
         goto bind_err;
     }
@@ -208,12 +197,10 @@ int ai_fetch(int (*hook)(void *, char *, int), void *arg)
     RK_S32 result;
 
     result = RK_MPI_AI_GetFrame(aiDevId, aiChn, &getFrame, RK_NULL, -1);
-    if (result == 0)
-    {
+    if (result == 0) {
         void *data = RK_MPI_MB_Handle2VirAddr(getFrame.pMbBlk);
         RK_LOGV("data = %p, len = %d", data, getFrame.u32Len);
-        if (getFrame.u32Len <= 0)
-        {
+        if (getFrame.u32Len <= 0) {
             RK_LOGD("get ai frame end");
             return 0;
         }
@@ -226,14 +213,12 @@ int ai_fetch(int (*hook)(void *, char *, int), void *arg)
     RK_S32 eos = 0;
 
     result = RK_MPI_AENC_GetStream(aeChn, &pstStream, -1);
-    if (result == RK_SUCCESS)
-    {
+    if (result == RK_SUCCESS) {
         MB_BLK bBlk = pstStream.pMbBlk;
         RK_VOID *pstFrame = RK_MPI_MB_Handle2VirAddr(bBlk);
         RK_S32 frameSize = pstStream.u32Len;
         eos = (frameSize <= 0) ? 1 : 0;
-        if (pstFrame)
-        {
+        if (pstFrame) {
             RK_LOGV("get frame data = %p, size = %d", pstFrame, frameSize);
             result = (hook(arg, pstFrame, frameSize) <= 0) ? RK_FAILURE : RK_SUCCESS;
             RK_MPI_AENC_ReleaseStream(aeChn, &pstStream);
@@ -249,36 +234,31 @@ int ai_deinit(void)
     int ret = 0;
 #if AENC_EN
     ret = RK_MPI_SYS_UnBind(&aiBindAttr, &aencBindAttr);
-    if (ret)
-    {
+    if (ret) {
         RK_LOGE("ai unbind aenc failed:0x%x\n", ret);
     }
 #endif
 
     ret = RK_MPI_AI_DisableChn(aiDevId, aiChn);
-    if (ret)
-    {
+    if (ret) {
         RK_LOGE("ai disable chn failed:0x%x\n", ret);
     }
 
 #if AVQE_EN
     ret = RK_MPI_AI_DisableVqe(aiDevId, aiVqeChn);
-    if (ret)
-    {
+    if (ret) {
         RK_LOGE("ai disable vqe failed:0x%x\n", ret);
     }
 #endif
 
     ret = RK_MPI_AI_Disable(aiDevId);
-    if (ret)
-    {
+    if (ret) {
         RK_LOGE("ai disable failed:0x%x\n", ret);
     }
 
 #if AENC_EN
     ret = RK_MPI_AENC_DestroyChn(aeChn);
-    if (ret)
-    {
+    if (ret) {
         RK_LOGE("aenc destroy chn failed:0x%x\n", ret);
     }
 #endif
@@ -294,8 +274,7 @@ static int ai_save(void *arg, char *buf, int len)
     int ret = fwrite(buf, 1, len, arg);
 
     duration += len / sizeof(short) / AUDIO_CH_OUT / (AUDIO_RATE / 1000);
-    if (duration / 1000 != last_ts)
-    {
+    if (duration / 1000 != last_ts) {
         last_ts = duration / 1000;
         RK_LOGI("duration: %.3fs %d", duration / 1000.0, len);
     }

@@ -130,4 +130,3 @@ if (EXISTS "${PROJECT_SOURCE_DIR}/tools/pre-commit")
 		message(STATUS "Install git hooks done")
 	endif()
 endif()
-

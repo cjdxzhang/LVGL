@@ -118,8 +118,9 @@ void cmd_answer(int cmd);
 
 static void logo_anim_cb(void *var, int32_t v)
 {
-    if (v > 15)
+    if (v > 15) {
         v = 30 - v;
+    }
     lv_obj_align(var, LV_ALIGN_BOTTOM_LEFT, 50, -50 - v);
 }
 
@@ -128,8 +129,7 @@ static void label0_anim_cb(void *var, int32_t v)
     lv_obj_add_flag(label[1], LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(var, LV_OBJ_FLAG_HIDDEN);
     lv_obj_align(var, LV_ALIGN_BOTTOM_RIGHT, -50, v);
-    if (v == -50)
-    {
+    if (v == -50) {
         lv_anim_set_delay(&label1_anim, 200);
         lv_anim_set_delay(&label2_anim, 200);
         lv_anim_start(&label1_anim);
@@ -146,7 +146,8 @@ static void label1_anim_cb(void *var, int32_t v)
 {
     lv_obj_clear_flag(var, LV_OBJ_FLAG_HIDDEN);
     lv_obj_align(var, LV_ALIGN_BOTTOM_LEFT, 180, v);
-//    if (v == -50) {
+//    if (v == -50)
+{
 //        lv_anim_set_delay(&label0_anim, 3000);
 //        lv_anim_start(&label0_anim);
 //    }
@@ -155,10 +156,8 @@ static void label1_anim_cb(void *var, int32_t v)
 static void timer_cb(struct _lv_timer_t *_timer)
 {
     static int show = 0;
-    if (wakeup)
-    {
-        if (!show)
-        {
+    if (wakeup) {
+        if (!show) {
             lv_anim_start(&logo_anim);
             lv_obj_clear_flag(icon, LV_OBJ_FLAG_HIDDEN);
             show = 1;
@@ -166,11 +165,8 @@ static void timer_cb(struct _lv_timer_t *_timer)
             lv_anim_del(&label1_anim, NULL);
             lv_anim_del(&label2_anim, NULL);
         }
-    }
-    else
-    {
-        if (show)
-        {
+    } else {
+        if (show) {
             lv_obj_add_flag(icon, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(label[0], LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(label[1], LV_OBJ_FLAG_HIDDEN);
@@ -180,8 +176,9 @@ static void timer_cb(struct _lv_timer_t *_timer)
             lv_anim_del(&label2_anim, NULL);
         }
     }
-    if (!wake_update)
+    if (!wake_update) {
         return;
+    }
     wake_update = 0;
     lv_obj_add_flag(label[0], LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(label[1], LV_OBJ_FLAG_HIDDEN);
@@ -267,15 +264,16 @@ void asr_icon_destroy(void)
 
 void asr_update(int id)
 {
-    if (id == -1)
-    {
+    if (id == -1) {
         wakeup = 0;
         return;
     }
-    if (id > (sizeof(cmds) / sizeof(cmds[0])))
+    if (id > (sizeof(cmds) / sizeof(cmds[0]))) {
         return;
-    if (cmds[id].ans == -1)
+    }
+    if (cmds[id].ans == -1) {
         return;
+    }
     wakeid = id;
     wake_update = 1;
     wakeup = 1;
@@ -291,8 +289,9 @@ void printf_asr_cmds(void)
     printf("asr cmds:\n");
     for (i = 0; i < max; i++)
     {
-        if (cmds[i].ans == -1)
+        if (cmds[i].ans == -1) {
             continue;
+        }
         printf("  %s %s\n", cmds[i].txt[0],
                cmds[i].txt[2]);
     }

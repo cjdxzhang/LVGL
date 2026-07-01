@@ -108,25 +108,29 @@ static lv_obj_t * create_mode_item(lv_obj_t * parent,
 
 static void home_btn_event_cb(lv_event_t * e)
 {
-    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
+        return;
+    }
 
-    if(s_home_cb) {
+    if (s_home_cb) {
         s_home_cb();
     }
 }
 
 static void back_btn_event_cb(lv_event_t * e)
 {
-    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
+        return;
+    }
 
-    if(s_back_cb) {
+    if (s_back_cb) {
         s_back_cb();
     }
 }
 
 lv_obj_t * setting_1_create(lv_obj_t * parent)
 {
-    if(s_setting_1_root) {
+    if (s_setting_1_root) {
     lv_obj_clear_flag(s_setting_1_root, LV_OBJ_FLAG_HIDDEN);
     return s_setting_1_root;
     }
@@ -232,12 +236,12 @@ lv_obj_t * setting_1_get_root(void)
 
 void setting_1_destroy(void)
 {
-    if(g_sleep_set_page) {
+    if (g_sleep_set_page) {
         lv_obj_del(g_sleep_set_page);
         g_sleep_set_page = NULL;
     }
 
-    if(s_setting_1_root) {
+    if (s_setting_1_root) {
         lv_obj_del(s_setting_1_root);
         s_setting_1_root = NULL;
     }
@@ -247,12 +251,12 @@ static void sleep_set_back_cb(lv_event_t * e)
 {
     LV_UNUSED(e);
 
-    if(g_sleep_set_page) {
+    if (g_sleep_set_page) {
         lv_obj_del(g_sleep_set_page);
         g_sleep_set_page = NULL;
     }
 
-    if(s_setting_1_root) {
+    if (s_setting_1_root) {
         lv_obj_clear_flag(s_setting_1_root, LV_OBJ_FLAG_HIDDEN);
     }
 }
@@ -261,16 +265,16 @@ static void sleep_set_home_cb(lv_event_t * e)
 {
     LV_UNUSED(e);
 
-    if(g_sleep_set_page) {
+    if (g_sleep_set_page) {
         lv_obj_del(g_sleep_set_page);
         g_sleep_set_page = NULL;
     }
 
-    if(s_setting_1_root) {
+    if (s_setting_1_root) {
         lv_obj_add_flag(s_setting_1_root, LV_OBJ_FLAG_HIDDEN);
     }
 
-    if(s_home_cb) {
+    if (s_home_cb) {
         s_home_cb();
     }
 }
@@ -279,11 +283,11 @@ static void sleep_item_event_cb(lv_event_t * e)
 {
     LV_UNUSED(e);
 
-    if(s_setting_1_root) {
+    if (s_setting_1_root) {
         lv_obj_add_flag(s_setting_1_root, LV_OBJ_FLAG_HIDDEN);
     }
 
-    if(g_sleep_set_page) {
+    if (g_sleep_set_page) {
         lv_obj_del(g_sleep_set_page);
         g_sleep_set_page = NULL;
     }

@@ -64,72 +64,75 @@ static void btn_cb(lv_event_t *e)
     cmdarg.val = &new_info;
     bt_query_wait(&cmdarg, sizeof(cmdarg));
 
-    if (new_info.bt_state < BT_STATE_CONNECTED)
+    if (new_info.bt_state < BT_STATE_CONNECTED) {
         return;
+    }
 
-    switch (idx)
-    {
-    case MUSIC_BTN_PREV:
-        cmdarg.cmd = BT_SINK_PREV;
-        bt_query(&cmdarg, sizeof(cmdarg));
-        break;
-    case MUSIC_BTN_PLAY:
-        if (new_info.bt_state == BT_STATE_PLAYING)
-            cmdarg.cmd = BT_SINK_PAUSE;
-        else
-            cmdarg.cmd = BT_SINK_PLAY;
-        bt_query(&cmdarg, sizeof(cmdarg));
-        break;
-    case MUSIC_BTN_NEXT:
-        cmdarg.cmd = BT_SINK_NEXT;
-        bt_query(&cmdarg, sizeof(cmdarg));
-        break;
-    case MUSIC_BTN_VOLUME_DOWN:
-        if (volume >= 10)
-            volume -= 10;
-        else
-            volume = 0;
-        cmdarg.cmd = BT_SINK_VOL;
-        cmdarg.val = (void *)volume;
-        bt_query(&cmdarg, sizeof(cmdarg));
-        break;
-    case MUSIC_BTN_VOLUME_UP:
-        if (volume <= 90)
-            volume += 10;
-        else
-            volume = 100;
-        cmdarg.cmd = BT_SINK_VOL;
-        cmdarg.val = (void *)volume;
-        bt_query(&cmdarg, sizeof(cmdarg));
-        break;
-    case MUSIC_BTN_VOLUME_MUTE:
-        if (mute)
+    switch (idx) {
+        case MUSIC_BTN_PREV:
+            cmdarg.cmd = BT_SINK_PREV;
+            bt_query(&cmdarg, sizeof(cmdarg));
+            break;
+        case MUSIC_BTN_PLAY:
+            if (new_info.bt_state == BT_STATE_PLAYING) {
+                cmdarg.cmd = BT_SINK_PAUSE;
+            } else {
+                cmdarg.cmd = BT_SINK_PLAY;
+            }
+            bt_query(&cmdarg, sizeof(cmdarg));
+            break;
+        case MUSIC_BTN_NEXT:
+            cmdarg.cmd = BT_SINK_NEXT;
+            bt_query(&cmdarg, sizeof(cmdarg));
+            break;
+        case MUSIC_BTN_VOLUME_DOWN:
+            if (volume >= 10) {
+                volume -= 10;
+            } else {
+                volume = 0;
+            }
+            cmdarg.cmd = BT_SINK_VOL;
             cmdarg.val = (void *)volume;
-        else
-            cmdarg.val = (void *)0;
-        cmdarg.cmd = BT_SINK_VOL;
-        bt_query(&cmdarg, sizeof(cmdarg));
-        mute = !mute;
-        break;
+            bt_query(&cmdarg, sizeof(cmdarg));
+            break;
+        case MUSIC_BTN_VOLUME_UP:
+            if (volume <= 90) {
+                volume += 10;
+            } else {
+                volume = 100;
+            }
+            cmdarg.cmd = BT_SINK_VOL;
+            cmdarg.val = (void *)volume;
+            bt_query(&cmdarg, sizeof(cmdarg));
+            break;
+        case MUSIC_BTN_VOLUME_MUTE:
+            if (mute) {
+                cmdarg.val = (void *)volume;
+            } else {
+                cmdarg.val = (void *)0;
+            }
+            cmdarg.cmd = BT_SINK_VOL;
+            bt_query(&cmdarg, sizeof(cmdarg));
+            mute = !mute;
+            break;
     }
 }
 
 static void update_state_label(lv_obj_t *label, int state)
 {
-    switch (new_info.bt_state)
-    {
-    case BT_STATE_OFF:
-        lv_label_set_text(label_bt_state,
-                          "蓝牙：未开启");
-        break;
-    case BT_STATE_ON:
-        lv_label_set_text(label_bt_state,
-                          "蓝牙：等待连接");
-        break;
-    default:
-        lv_label_set_text(label_bt_state,
-                          "蓝牙：已连接");
-        break;
+    switch (new_info.bt_state) {
+        case BT_STATE_OFF:
+            lv_label_set_text(label_bt_state,
+                              "蓝牙：未开启");
+            break;
+        case BT_STATE_ON:
+            lv_label_set_text(label_bt_state,
+                              "蓝牙：等待连接");
+            break;
+        default:
+            lv_label_set_text(label_bt_state,
+                              "蓝牙：已连接");
+            break;
     }
 }
 
@@ -143,25 +146,23 @@ static void pos_timer_cb(struct _lv_timer_t *tmr)
     cmdarg.val = &new_info;
     bt_query_wait(&cmdarg, sizeof(cmdarg));
 
-    if (new_info.bt_state != bt_state)
-    {
-        if (new_info.bt_state == BT_STATE_PLAYING)
+    if (new_info.bt_state != bt_state) {
+        if (new_info.bt_state == BT_STATE_PLAYING) {
             lv_label_set_text(btn_play, LV_SYMBOL_PAUSE);
-        else
+        } else {
             lv_label_set_text(btn_play, LV_SYMBOL_PLAY);
+        }
         bt_state = new_info.bt_state;
     }
 
-    if (new_info.pos_changed)
-    {
+    if (new_info.pos_changed) {
         g_pos = new_info.pos;
         cmdarg.cmd = BT_SINK_POS_CLEAR;
         bt_query(&cmdarg, sizeof(cmdarg));
-    }
-    else
-    {
-        if (new_info.bt_state != BT_STATE_PLAYING)
+    } else {
+        if (new_info.bt_state != BT_STATE_PLAYING) {
             return;
+        }
         g_pos += 100;
     }
     pos = g_pos / 1000;
@@ -169,16 +170,17 @@ static void pos_timer_cb(struct _lv_timer_t *tmr)
     lv_label_set_text_fmt(label_time, "%02d:%02d / %02d:%02d",
                           pos / 60, pos % 60, dur / 60, dur % 60);
 
-    if (new_info.track_changed)
-    {
+    if (new_info.track_changed) {
         title = strdup(new_info.title);
         artist = strdup(new_info.artist);
         lv_label_set_text(label_singer, artist);
         lv_label_set_text(label_song, title);
-        if (title)
+        if (title) {
             free(title);
-        if (artist)
+        }
+        if (artist) {
             free(artist);
+        }
         cmdarg.cmd = BT_SINK_TRACK_CLEAR;
         bt_query(&cmdarg, sizeof(cmdarg));
     }
@@ -192,9 +194,8 @@ static void bt_timer_cb(struct _lv_timer_t *tmr)
     bt_query_wait(&cmdarg, sizeof(cmdarg));
 
     update_state_label(label_bt_state, new_info.bt_state);
-    if ((last_state != BT_STATE_OFF) &&
-            (new_info.bt_state == BT_STATE_OFF))
-    {
+    if ((last_state != BT_STATE_OFF) && 
+            (new_info.bt_state == BT_STATE_OFF)) {
         last_state = new_info.bt_state;
         cmdarg.cmd = BT_ENABLE;
         bt_query(&cmdarg, sizeof(cmdarg));
@@ -211,14 +212,11 @@ void app_music_init(lv_obj_t *parent, void *userdata)
     cmdarg.cmd = BT_INFO;
     cmdarg.val = &new_info;
     bt_query_wait(&cmdarg, sizeof(cmdarg));
-    if (new_info.bt_state == BT_STATE_OFF)
-    {
+    if (new_info.bt_state == BT_STATE_OFF) {
         bt_sink_enabled = 0;
         cmdarg.cmd = BT_SINK_ENABLE;
         bt_query(&cmdarg, sizeof(cmdarg));
-    }
-    else
-    {
+    } else {
         bt_sink_enabled = 1;
     }
 
@@ -296,8 +294,9 @@ void app_music_init(lv_obj_t *parent, void *userdata)
         obj = lv_label_create(obj);
         lv_label_set_text(obj, btn_img[i]);
         lv_obj_center(obj);
-        if (i == 1)
+        if (i == 1) {
             btn_play = obj;
+        }
     }
 
     timer = lv_timer_create(bt_timer_cb, 3000, NULL);
@@ -309,8 +308,7 @@ void app_music_deinit(void *userdata)
     lv_timer_del(timer);
     lv_timer_del(pos_timer);
 
-    if (bt_sink_enabled)
-    {
+    if (bt_sink_enabled) {
         cmdarg.cmd = BT_SINK_DISABLE;
         bt_query(&cmdarg, sizeof(cmdarg));
         bt_sink_enabled = 0;

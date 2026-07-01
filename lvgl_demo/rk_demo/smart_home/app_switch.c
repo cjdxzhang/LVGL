@@ -22,15 +22,12 @@ void app_switch_init(lv_obj_t *parent, void *userdata)
 
     obj = lv_switch_create(cont);
 
-    if (userdata)
-    {
+    if (userdata) {
         lv_label_set_text(label, userdata);
         /* FIXME, random or specified state */
         lv_obj_add_state(obj, (((uint8_t *)userdata)[0] & 0x4) ?
                          LV_STATE_CHECKED : LV_STATE_DEFAULT);
-    }
-    else
-    {
+    } else {
         lv_label_set_text_fmt(label, "开关 %d", idx++);
         lv_obj_add_state(obj, (idx % 3 == 0));
     }

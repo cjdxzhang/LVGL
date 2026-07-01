@@ -48,8 +48,9 @@ static void screen_timeout_cb(lv_event_t *event)
     lv_obj_t *obj = lv_event_get_target(event);
 
     selected_id = lv_dropdown_get_selected(obj);
-    if (selected_id > ARRAY_SIZE(timeout_value))
+    if (selected_id > ARRAY_SIZE(timeout_value)) {
         selected_id = ARRAY_SIZE(timeout_value);
+    }
     backlight_set_timeout(timeout_value[selected_id]);
 }
 

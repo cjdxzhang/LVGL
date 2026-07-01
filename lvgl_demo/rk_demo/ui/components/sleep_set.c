@@ -283,7 +283,7 @@ static void create_page_thumb(lv_obj_t * panel)
 
 static void update_setting_thumb_pos(void)
 {
-    if(s_setting_viewport == NULL || s_setting_thumb == NULL) {
+    if (s_setting_viewport == NULL || s_setting_thumb == NULL) {
         return;
     }
 
@@ -291,14 +291,14 @@ static void update_setting_thumb_pos(void)
     lv_coord_t max_scroll = scroll_top + lv_obj_get_scroll_bottom(s_setting_viewport);
     lv_coord_t thumb_y = THUMB_Y;
 
-    if(max_scroll > 0) {
+    if (max_scroll > 0) {
         thumb_y = THUMB_Y + (lv_coord_t)((int32_t)scroll_top * THUMB_TRAVEL / max_scroll);
     }
 
-    if(thumb_y < THUMB_Y) {
+    if (thumb_y < THUMB_Y) {
         thumb_y = THUMB_Y;
     }
-    if(thumb_y > THUMB_Y + THUMB_TRAVEL) {
+    if (thumb_y > THUMB_Y + THUMB_TRAVEL) {
         thumb_y = THUMB_Y + THUMB_TRAVEL;
     }
 
@@ -419,20 +419,20 @@ static lv_obj_t * create_dropdown_value(lv_obj_t * parent,
 static void dropdown_event_cb(lv_event_t * e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    if(code != LV_EVENT_CLICKED && code != LV_EVENT_VALUE_CHANGED && code != LV_EVENT_READY) {
+    if (code != LV_EVENT_CLICKED && code != LV_EVENT_VALUE_CHANGED && code != LV_EVENT_READY) {
         return;
     }
 
     lv_obj_t * dd = lv_event_get_target(e);
     sleep_dropdown_role_t role = (sleep_dropdown_role_t)(uintptr_t)lv_event_get_user_data(e);
 
-    if(code == LV_EVENT_VALUE_CHANGED &&
-       (role == SLEEP_DD_BATH_TIME_MAIN || role == SLEEP_DD_BATH_TIME_SUB)) {
+    if (code == LV_EVENT_VALUE_CHANGED && 
+         (role == SLEEP_DD_BATH_TIME_MAIN || role == SLEEP_DD_BATH_TIME_SUB)) {
         sleep_set_sync_bath_time(dd);
     }
 
     lv_obj_t * list = lv_dropdown_get_list(dd);
-    if(list == NULL) {
+    if (list == NULL) {
         return;
     }
 
@@ -443,20 +443,20 @@ static void dropdown_event_cb(lv_event_t * e)
 
 static void action_btn_event_cb(lv_event_t * e)
 {
-    if(lv_event_get_code(e) != LV_EVENT_CLICKED) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
         return;
     }
 
     sleep_action_id_t action_id = (sleep_action_id_t)(uintptr_t)lv_event_get_user_data(e);
 
-    if(action_id == SLEEP_ACTION_SAVE) {
+    if (action_id == SLEEP_ACTION_SAVE) {
         sleep_set_cfg_t cfg = sleep_set_get_default_cfg();
         sleep_set_read_cfg_from_ui(&cfg);
         (void)sleep_set_save_cfg(&cfg);
         return;
     }
 
-    if(action_id == SLEEP_ACTION_RESTORE) {
+    if (action_id == SLEEP_ACTION_RESTORE) {
         sleep_set_cfg_t cfg = sleep_set_get_default_cfg();
         sleep_set_apply_cfg_to_ui(&cfg);
         (void)sleep_set_save_cfg(&cfg);
@@ -481,18 +481,22 @@ static lv_obj_t * create_action_btn(lv_obj_t * parent, lv_coord_t x, lv_coord_t 
 
 static void back_btn_event_cb(lv_event_t * e)
 {
-    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
+        return;
+    }
 
-    if(s_back_cb) {
+    if (s_back_cb) {
         s_back_cb(e);
     }
 }
 
 static void home_btn_event_cb(lv_event_t * e)
 {
-    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
+        return;
+    }
 
-    if(s_home_cb) {
+    if (s_home_cb) {
         s_home_cb(e);
     }
 }
@@ -513,18 +517,18 @@ static sleep_set_cfg_t sleep_set_get_default_cfg(void)
 static bool sleep_set_load_cfg(sleep_set_cfg_t * cfg)
 {
     FILE * fp = fopen(SLEEP_SET_CFG_PATH, "rb");
-    if(fp == NULL) {
+    if (fp == NULL) {
         return false;
     }
 
     sleep_set_cfg_t file_cfg;
     size_t nread = fread(&file_cfg, sizeof(file_cfg), 1, fp);
     fclose(fp);
-    if(nread != 1) {
+    if (nread != 1) {
         return false;
     }
 
-    if(file_cfg.magic != SLEEP_SET_CFG_MAGIC || file_cfg.version != SLEEP_SET_CFG_VERSION) {
+    if (file_cfg.magic != SLEEP_SET_CFG_MAGIC || file_cfg.version != SLEEP_SET_CFG_VERSION) {
         return false;
     }
 
@@ -535,7 +539,7 @@ static bool sleep_set_load_cfg(sleep_set_cfg_t * cfg)
 static bool sleep_set_save_cfg(const sleep_set_cfg_t * cfg)
 {
     FILE * fp = fopen(SLEEP_SET_CFG_PATH, "wb");
-    if(fp == NULL) {
+    if (fp == NULL) {
         return false;
     }
 
@@ -547,11 +551,11 @@ static bool sleep_set_save_cfg(const sleep_set_cfg_t * cfg)
 static uint16_t sleep_set_limit_dropdown_value(lv_obj_t * dd, uint8_t value)
 {
     uint16_t option_cnt = lv_dropdown_get_option_count(dd);
-    if(option_cnt == 0) {
+    if (option_cnt == 0) {
         return 0;
     }
 
-    if(value >= option_cnt) {
+    if (value >= option_cnt) {
         return (uint16_t)(option_cnt - 1);
     }
 
@@ -560,22 +564,22 @@ static uint16_t sleep_set_limit_dropdown_value(lv_obj_t * dd, uint8_t value)
 
 static void sleep_set_apply_cfg_to_ui(const sleep_set_cfg_t * cfg)
 {
-    if(s_dd_water_temp) {
+    if (s_dd_water_temp) {
         lv_dropdown_set_selected(s_dd_water_temp, sleep_set_limit_dropdown_value(s_dd_water_temp, cfg->water_temp));
     }
-    if(s_dd_water_level) {
+    if (s_dd_water_level) {
         lv_dropdown_set_selected(s_dd_water_level, sleep_set_limit_dropdown_value(s_dd_water_level, cfg->water_level));
     }
-    if(s_dd_bath_time_main) {
+    if (s_dd_bath_time_main) {
         lv_dropdown_set_selected(s_dd_bath_time_main, sleep_set_limit_dropdown_value(s_dd_bath_time_main, cfg->bath_time));
     }
-    if(s_dd_bath_time_sub) {
+    if (s_dd_bath_time_sub) {
         lv_dropdown_set_selected(s_dd_bath_time_sub, sleep_set_limit_dropdown_value(s_dd_bath_time_sub, cfg->bath_time));
     }
-    if(s_dd_medicine) {
+    if (s_dd_medicine) {
         lv_dropdown_set_selected(s_dd_medicine, sleep_set_limit_dropdown_value(s_dd_medicine, cfg->medicine));
     }
-    if(s_dd_location) {
+    if (s_dd_location) {
         lv_dropdown_set_selected(s_dd_location, sleep_set_limit_dropdown_value(s_dd_location, cfg->location));
     }
 }
@@ -584,19 +588,19 @@ static void sleep_set_read_cfg_from_ui(sleep_set_cfg_t * cfg)
 {
     cfg->magic = SLEEP_SET_CFG_MAGIC;
     cfg->version = SLEEP_SET_CFG_VERSION;
-    if(s_dd_water_temp) {
+    if (s_dd_water_temp) {
         cfg->water_temp = (uint8_t)lv_dropdown_get_selected(s_dd_water_temp);
     }
-    if(s_dd_water_level) {
+    if (s_dd_water_level) {
         cfg->water_level = (uint8_t)lv_dropdown_get_selected(s_dd_water_level);
     }
-    if(s_dd_bath_time_main) {
+    if (s_dd_bath_time_main) {
         cfg->bath_time = (uint8_t)lv_dropdown_get_selected(s_dd_bath_time_main);
     }
-    if(s_dd_medicine) {
+    if (s_dd_medicine) {
         cfg->medicine = (uint8_t)lv_dropdown_get_selected(s_dd_medicine);
     }
-    if(s_dd_location) {
+    if (s_dd_location) {
         cfg->location = (uint8_t)lv_dropdown_get_selected(s_dd_location);
     }
 }
@@ -605,9 +609,9 @@ static void sleep_set_sync_bath_time(lv_obj_t * changed)
 {
     uint16_t selected = lv_dropdown_get_selected(changed);
 
-    if(changed == s_dd_bath_time_main && s_dd_bath_time_sub) {
+    if (changed == s_dd_bath_time_main && s_dd_bath_time_sub) {
         lv_dropdown_set_selected(s_dd_bath_time_sub, selected);
-    } else if(changed == s_dd_bath_time_sub && s_dd_bath_time_main) {
+    } else if (changed == s_dd_bath_time_sub && s_dd_bath_time_main) {
         lv_dropdown_set_selected(s_dd_bath_time_main, selected);
     }
 }

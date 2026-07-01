@@ -6,5 +6,6 @@
 
 void screen_home_create(void);
 void screen_home_set_clean_pending(bool pending);
+void screen_home_show_loca_end(void);
 
 #endif

@@ -79,7 +79,9 @@ void net_manager_register_cb(net_recv_cb_t cb)
 
 int net_manager_send(uint8_t *data, uint16_t len)
 {
-    if (sock_fd < 0) return -1;
+    if (sock_fd < 0) {
+        return -1;
+    }
     return send(sock_fd, data, len, 0);
 }
 

@@ -22,8 +22,7 @@ int run_wifibt_server(void)
 
 #if WIFIBT_EN || BT_EN
     pthread_t tid;
-    if (pthread_create(&tid, NULL, wifibt_init, NULL))
-    {
+    if (pthread_create(&tid, NULL, wifibt_init, NULL)) {
         log("pthread create err\n");
         return -1;
     }
@@ -31,13 +30,15 @@ int run_wifibt_server(void)
 
 #if WIFIBT_EN
     ret = run_wifi_server();
-    if (ret != 0)
+    if (ret != 0) {
         log("run_wifi_server failed\n");
+    }
 #endif
 #if BT_EN
     ret = run_bt_server();
-    if (ret != 0)
+    if (ret != 0) {
         log("run_bt_server failed\n");
+    }
 #endif
 
     return ret;

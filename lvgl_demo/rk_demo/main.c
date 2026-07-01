@@ -43,8 +43,7 @@ int main(int argc, char **argv)
     max_priority = sched_get_priority_max(SCHED_FIFO);
     param.sched_priority = max_priority;
 
-    if (sched_setscheduler(0, SCHED_FIFO, &param) == -1)
-    {
+    if (sched_setscheduler(0, SCHED_FIFO, &param) == -1) {
         perror("sched_setscheduler failed");
     }
 

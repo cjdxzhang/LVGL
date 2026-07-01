@@ -46,23 +46,23 @@ static int apps = ARRAY_SIZE(apps_desc);
 
 static void btn_return_cb(lv_event_t *e)
 {
-    switch (e->code)
-    {
-    case LV_EVENT_CLICKED:
-        home_ui_init();
-        for (int i = 0; i < apps; i++)
-        {
-            if (apps_desc[i].deinit)
-                apps_desc[i].deinit(apps_desc[i].userdata);
-        }
-        lv_obj_del(main);
-        main = NULL;
+    switch (e->code) {
+        case LV_EVENT_CLICKED:
+            home_ui_init();
+            for (int i = 0; i < apps; i++)
+            {
+                if (apps_desc[i].deinit) {
+                    apps_desc[i].deinit(apps_desc[i].userdata);
+                }
+            }
+            lv_obj_del(main);
+            main = NULL;
 #if ASR_EN
-        asr_audio_deinit();
+            asr_audio_deinit();
 #endif
-        break;
-    default:
-        break;
+            break;
+        default:
+            break;
     }
 }
 
@@ -70,8 +70,9 @@ static void scroll_cb(lv_event_t *event)
 {
     for (int i = 0; i < apps; i++)
     {
-        if (apps_desc[i].scroll_cb)
+        if (apps_desc[i].scroll_cb) {
             apps_desc[i].scroll_cb(event, apps_desc[i].userdata);
+        }
     }
 }
 
@@ -117,8 +118,7 @@ void smart_home_ui_init(void)
     asr_audio_init();
 #endif
 
-    if (main)
-    {
+    if (main) {
         lv_obj_clear_flag(main, LV_OBJ_FLAG_HIDDEN);
         return;
     }
@@ -153,10 +153,10 @@ void smart_home_ui_init(void)
             tl_item = tile_layout_new_item(tl, apps_desc[idx].w,
                                            apps_desc[idx].h,
                                            !apps_desc[idx].init);
-            if (!tl_item)
+            if (!tl_item) {
                 break;
-            if (apps_desc[idx].init)
-            {
+            }
+            if (apps_desc[idx].init) {
                 init_app_bg(tl_item);
                 apps_desc[idx].init(tl_item, apps_desc[idx].userdata);
             }

@@ -9,16 +9,23 @@ LV_FONT_DECLARE(mode);
 LV_FONT_DECLARE(mode1);
 LV_FONT_DECLARE(mode2);
 LV_FONT_DECLARE(mode3);
+LV_FONT_DECLARE(font_cn_28_3);
+LV_FONT_DECLARE(heat_on);
+LV_FONT_DECLARE(massage);
+LV_FONT_DECLARE(sterilize);
+LV_FONT_DECLARE(timing);
+LV_FONT_DECLARE(auto_to_warehouse);
+LV_FONT_DECLARE(footbath_liquid);
 
 static btn_event_cb_t s_btn_event_cb = NULL;
 
 static void btn_click_event_cb(lv_event_t * e)
 {
-    if(lv_event_get_code(e) != LV_EVENT_CLICKED) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
         return;
     }
 
-    if(s_btn_event_cb == NULL) {
+    if (s_btn_event_cb == NULL) {
         return;
     }
 
@@ -58,11 +65,14 @@ static void btn_style_frosted_base(lv_obj_t * obj, lv_coord_t radius)
     btn_style_shadow(obj);
 }
 
-static lv_obj_t * create_mode_btn(lv_obj_t * parent, int w, int h,
-                                  const lv_font_t * icon_font,
-                                  const lv_font_t * title_font,
-                                  const char * icon_txt,
-                                  const char * title_txt)
+static lv_obj_t * create_mode_btn_ex(lv_obj_t * parent, int w, int h,
+                                     const lv_font_t * icon_font,
+                                     const lv_font_t * title_font,
+                                     const char * icon_txt,
+                                     const char * title_txt,
+                                     int icon_y,
+                                     int title_y,
+                                     int icon_scale)
 {
     lv_obj_t * card = lv_btn_create(parent);
     lv_obj_set_size(card, w, h);
@@ -73,19 +83,55 @@ static lv_obj_t * create_mode_btn(lv_obj_t * parent, int w, int h,
 
     lv_obj_t * icon = lv_label_create(card);
     lv_label_set_text(icon, icon_txt);
+    lv_obj_set_size(icon, w, 92);
     lv_obj_set_style_text_font(icon, icon_font, 0);
     lv_obj_set_style_text_color(icon, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_align(icon, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(icon, LV_ALIGN_TOP_MID, 0, 28);
+    if (icon_scale != 256) {
+        lv_obj_set_style_transform_scale(icon, icon_scale, 0);
+        lv_obj_set_style_transform_pivot_x(icon, w / 2, 0);
+        lv_obj_set_style_transform_pivot_y(icon, 46, 0);
+    }
+    lv_obj_align(icon, LV_ALIGN_TOP_MID, 0, icon_y);
 
     lv_obj_t * title = lv_label_create(card);
     lv_label_set_text(title, title_txt);
     lv_obj_set_style_text_font(title, title_font, 0);
     lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_align(title, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_align(title, LV_ALIGN_BOTTOM_MID, 0, -16);
+    lv_obj_align(title, LV_ALIGN_BOTTOM_MID, 0, title_y);
 
     return card;
+}
+
+static lv_obj_t * create_mode_btn(lv_obj_t * parent, int w, int h,
+                                  const lv_font_t * icon_font,
+                                  const lv_font_t * title_font,
+                                  const char * icon_txt,
+                                  const char * title_txt)
+{
+    return create_mode_btn_ex(parent, w, h, icon_font, title_font,
+                              icon_txt, title_txt, 28, -16, 256);
+}
+
+static lv_obj_t * create_bucket_mode_btn(lv_obj_t * parent, int w, int h,
+                                         const lv_font_t * icon_font,
+                                         const lv_font_t * title_font,
+                                         const char * icon_txt,
+                                         const char * title_txt)
+{
+    return create_mode_btn_ex(parent, w, h, icon_font, title_font,
+                              icon_txt, title_txt, 28, -16, 256);
+}
+
+static lv_obj_t * create_bucket_mode_btn_loose(lv_obj_t * parent, int w, int h,
+                                               const lv_font_t * icon_font,
+                                               const lv_font_t * title_font,
+                                               const char * icon_txt,
+                                               const char * title_txt)
+{
+    return create_mode_btn_ex(parent, w, h, icon_font, title_font,
+                              icon_txt, title_txt, 18, -10, 256);
 }
 
 static lv_obj_t * create_small_ctrl_btn(lv_obj_t * parent, int x, int y, const char * txt)
@@ -95,6 +141,24 @@ static lv_obj_t * create_small_ctrl_btn(lv_obj_t * parent, int x, int y, const c
     lv_obj_set_pos(btn, x, y);
 
     btn_style_frosted_base(btn, 35);
+    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t * label = lv_label_create(btn);
+    lv_label_set_text(label, txt);
+    lv_obj_set_style_text_font(label, &control, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_center(label);
+
+    return btn;
+}
+
+static lv_obj_t * create_big_ctrl_btn(lv_obj_t * parent, int x, int y, const char * txt)
+{
+    lv_obj_t * btn = lv_btn_create(parent);
+    lv_obj_set_size(btn, 112, 201);
+    lv_obj_set_pos(btn, x, y);
+
+    btn_style_frosted_base(btn, 42);
     lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t * label = lv_label_create(btn);
@@ -116,13 +180,14 @@ void btn_create_left_group(lv_obj_t * parent)
     btn_style_frosted_base(play_btn, 42);
     lv_obj_clear_flag(play_btn, LV_OBJ_FLAG_SCROLLABLE);
 
-   lv_obj_t * play_label = lv_label_create(play_btn);
+    lv_obj_t * play_label = lv_label_create(play_btn);
+    // \xEE\x98\x96 是 UTF-8 编码的U+E616  再通过lv_obj_set_style_text_font里的&control1来确定哪个字体
     lv_label_set_text(play_label, "\xEE\x98\x96");   /* U+E616 */
     lv_obj_set_style_text_font(play_label, &control1, 0);
     lv_obj_set_style_text_color(play_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_align(play_label, LV_ALIGN_CENTER, 3, 0);
     lv_obj_add_event_cb(play_btn, btn_click_event_cb, LV_EVENT_CLICKED,
-                   (void *)(intptr_t)BTN_EVENT_START);
+                        (void *)(intptr_t)BTN_EVENT_START);
 
     /* ===== 中间四个控制按钮 ===== */
     lv_obj_t * btn_plus  = create_small_ctrl_btn(parent, 175, 232, "\xEE\x98\x80");  /* U+E600 */
@@ -134,6 +199,41 @@ void btn_create_left_group(lv_obj_t * parent)
     lv_obj_set_size(btn_minus, 100, 100);
     lv_obj_set_size(btn_time, 100, 100);
     lv_obj_set_size(btn_water, 100, 100);
+
+    lv_obj_add_event_cb(btn_plus, btn_click_event_cb, LV_EVENT_CLICKED,
+                        (void *)(intptr_t)BTN_EVENT_TEMP_UP);
+    lv_obj_add_event_cb(btn_minus, btn_click_event_cb, LV_EVENT_CLICKED,
+                        (void *)(intptr_t)BTN_EVENT_TEMP_DOWN);
+    lv_obj_add_event_cb(btn_time, btn_click_event_cb, LV_EVENT_CLICKED,
+                        (void *)(intptr_t)BTN_EVENT_TIMER_NEXT);
+    lv_obj_add_event_cb(btn_water, btn_click_event_cb, LV_EVENT_CLICKED,
+                        (void *)(intptr_t)BTN_EVENT_WATER_NEXT);
+}
+
+void btn_create_disconnected_left_group(lv_obj_t * parent)
+{
+    lv_obj_t * play_btn = lv_btn_create(parent);
+    lv_obj_set_size(play_btn, 135, 201);
+    lv_obj_set_pos(play_btn, 15, 245);
+
+    btn_style_frosted_base(play_btn, 42);
+    lv_obj_clear_flag(play_btn, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t * play_label = lv_label_create(play_btn);
+    lv_label_set_text(play_label, "\xEE\x98\x96");
+    lv_obj_set_style_text_font(play_label, &control1, 0);
+    lv_obj_set_style_text_color(play_label, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_align(play_label, LV_ALIGN_CENTER, 3, 0);
+    lv_obj_add_event_cb(play_btn, btn_click_event_cb, LV_EVENT_CLICKED,
+                        (void *)(intptr_t)BTN_EVENT_START);
+
+    lv_obj_t * btn_plus = create_big_ctrl_btn(parent, 180, 245, "\xEE\x98\x80");
+    lv_obj_t * btn_minus = create_big_ctrl_btn(parent, 315, 245, "\xEE\x98\xAB");
+
+    lv_obj_add_event_cb(btn_plus, btn_click_event_cb, LV_EVENT_CLICKED,
+                        (void *)(intptr_t)BTN_EVENT_TEMP_UP);
+    lv_obj_add_event_cb(btn_minus, btn_click_event_cb, LV_EVENT_CLICKED,
+                        (void *)(intptr_t)BTN_EVENT_TEMP_DOWN);
 }
 
 void btn_create_right_page1(lv_obj_t * parent)
@@ -142,13 +242,13 @@ void btn_create_right_page1(lv_obj_t * parent)
     lv_obj_t * card_sleep = create_mode_btn(parent, 160, 160, &mode, &font_cn_28, "\xEE\x9B\x8F", "助眠");
     lv_obj_set_pos(card_sleep, 0, 0);
     lv_obj_add_event_cb(card_sleep, btn_click_event_cb, LV_EVENT_CLICKED,
-                       (void *)(intptr_t)BTN_EVENT_MODE_SLEEP);
+                        (void *)(intptr_t)BTN_EVENT_MODE_SLEEP);
 
     lv_obj_t * card_relax = lv_btn_create(parent);
     lv_obj_set_size(card_relax, 160, 160);
     lv_obj_set_pos(card_relax, 186, 0);
     lv_obj_add_event_cb(card_relax, btn_click_event_cb, LV_EVENT_CLICKED,
-                       (void *)(intptr_t)BTN_EVENT_MODE_RELAX);
+                        (void *)(intptr_t)BTN_EVENT_MODE_RELAX);
 
     btn_style_frosted_base(card_relax, 50);
     lv_obj_set_style_pad_all(card_relax, 0, 0);
@@ -190,7 +290,7 @@ void btn_create_right_page1(lv_obj_t * parent)
     lv_obj_set_style_text_align(warm_title, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(warm_title, LV_ALIGN_BOTTOM_MID, 0, -16);
     lv_obj_add_event_cb(card_warm, btn_click_event_cb, LV_EVENT_CLICKED,
-                       (void *)(intptr_t)BTN_EVENT_MODE_WARM);
+                        (void *)(intptr_t)BTN_EVENT_MODE_WARM);
 
     lv_obj_t * card_clean = lv_btn_create(parent);
     lv_obj_set_size(card_clean, 160, 160);
@@ -214,17 +314,45 @@ void btn_create_right_page1(lv_obj_t * parent)
     lv_obj_set_style_text_align(clean_title, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(clean_title, LV_ALIGN_BOTTOM_MID, 0, -16);
     lv_obj_add_event_cb(card_clean, btn_click_event_cb, LV_EVENT_CLICKED,
-                       (void *)(intptr_t)BTN_EVENT_MODE_CLEAN);
+                        (void *)(intptr_t)BTN_EVENT_MODE_CLEAN);
+}
+
+void btn_create_disconnected_right_page1(lv_obj_t * parent)
+{
+    lv_obj_t * card_heat = create_bucket_mode_btn_loose(parent, 160, 160, &heat_on, &font_cn_28_3,
+                                                        "\xEE\x9B\xB7", "恒温");
+    lv_obj_set_pos(card_heat, 0, 0);
+    lv_obj_add_event_cb(card_heat, btn_click_event_cb, LV_EVENT_CLICKED,
+                        (void *)(intptr_t)BTN_EVENT_DISCONNECTED_HEAT);
+
+    lv_obj_t * card_massage = create_bucket_mode_btn_loose(parent, 160, 160, &massage, &font_cn_28_3,
+                                                           "\xEE\x98\x8A", "按摩");
+    lv_obj_set_pos(card_massage, 186, 0);
+    lv_obj_add_event_cb(card_massage, btn_click_event_cb, LV_EVENT_CLICKED,
+                        (void *)(intptr_t)BTN_EVENT_DISCONNECTED_MASSAGE);
+
+    lv_obj_t * card_sterilize = create_bucket_mode_btn(parent, 160, 160, &sterilize, &font_cn_28_3,
+                                                       "\xEE\x9A\x8F", "除菌");
+    lv_obj_set_pos(card_sterilize, 0, 205);
+    lv_obj_add_event_cb(card_sterilize, btn_click_event_cb, LV_EVENT_CLICKED,
+                        (void *)(intptr_t)BTN_EVENT_DISCONNECTED_STERILIZE);
+
+    lv_obj_t * card_timer = create_bucket_mode_btn_loose(parent, 160, 160, &timing, &font_cn_28_3,
+                                                         "\xEE\x98\x94", "定时");
+    lv_obj_set_pos(card_timer, 186, 205);
+    lv_obj_add_event_cb(card_timer, btn_click_event_cb, LV_EVENT_CLICKED,
+                        (void *)(intptr_t)BTN_EVENT_DISCONNECTED_TIMER);
 }
 
 void btn_create_right_page2(lv_obj_t * parent)
 {
     /* 第二页四个功能按钮 */
 
-    lv_obj_t * card_bath1 = create_mode_btn(parent, 160, 160, &mode3, &font_cn_28_2, "\xEE\x98\x85", "药浴1");
+    lv_obj_t * card_bath1 = create_mode_btn(parent, 160, 160, &footbath_liquid,
+                                            &font_cn_28_2, "\xEE\x98\x85", "药浴1");
     lv_obj_set_pos(card_bath1, 0, 0);
     lv_obj_add_event_cb(card_bath1, btn_click_event_cb, LV_EVENT_CLICKED,
-                       (void *)(intptr_t)BTN_EVENT_BATH1);
+                        (void *)(intptr_t)BTN_EVENT_BATH1);
 
     lv_obj_t * card_bath2 = lv_btn_create(parent);
     lv_obj_set_size(card_bath2, 160, 160);
@@ -235,9 +363,8 @@ void btn_create_right_page2(lv_obj_t * parent)
     lv_obj_clear_flag(card_bath2, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t * bath2_icon = lv_label_create(card_bath2);
-    lv_label_set_text(bath2_icon, "\xEE\x98\x85");
-    lv_obj_set_style_text_font(bath2_icon, &mode3, 0);
-    lv_obj_align(bath2_icon, LV_ALIGN_TOP_MID, 0, 18);
+    lv_label_set_text(bath2_icon, "\xEE\x98\x86");
+    lv_obj_set_style_text_font(bath2_icon, &footbath_liquid, 0);
     lv_obj_set_style_text_color(bath2_icon, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_align(bath2_icon, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(bath2_icon, LV_ALIGN_TOP_MID, 0, 25);
@@ -249,7 +376,7 @@ void btn_create_right_page2(lv_obj_t * parent)
     lv_obj_set_style_text_align(bath2_title, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(bath2_title, LV_ALIGN_BOTTOM_MID, 0, -16);
     lv_obj_add_event_cb(card_bath2, btn_click_event_cb, LV_EVENT_CLICKED,
-                       (void *)(intptr_t)BTN_EVENT_BATH2);
+                        (void *)(intptr_t)BTN_EVENT_BATH2);
 
     lv_obj_t * card_locate = lv_btn_create(parent);
     lv_obj_set_size(card_locate, 160, 160);
@@ -262,7 +389,6 @@ void btn_create_right_page2(lv_obj_t * parent)
     lv_obj_t * locate_icon = lv_label_create(card_locate);
     lv_label_set_text(locate_icon, "\xEE\x98\xA9");
     lv_obj_set_style_text_font(locate_icon, &mode3, 0);
-    lv_obj_align(locate_icon, LV_ALIGN_TOP_MID, 0, 28);
     lv_obj_set_style_text_color(locate_icon, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_align(locate_icon, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(locate_icon, LV_ALIGN_TOP_MID, 0, 25);
@@ -274,7 +400,7 @@ void btn_create_right_page2(lv_obj_t * parent)
     lv_obj_set_style_text_align(locate_title, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(locate_title, LV_ALIGN_BOTTOM_MID, 0, -16);
     lv_obj_add_event_cb(card_locate, btn_click_event_cb, LV_EVENT_CLICKED,
-                       (void *)(intptr_t)BTN_EVENT_LOCATE);
+                        (void *)(intptr_t)BTN_EVENT_LOCATE);
 
     lv_obj_t * card_setting = lv_btn_create(parent);
     lv_obj_set_size(card_setting, 160, 160);
@@ -287,7 +413,6 @@ void btn_create_right_page2(lv_obj_t * parent)
     lv_obj_t * setting_icon = lv_label_create(card_setting);
     lv_label_set_text(setting_icon, "\xEE\x98\x9B");
     lv_obj_set_style_text_font(setting_icon, &mode3, 0);
-    lv_obj_align(setting_icon, LV_ALIGN_TOP_MID, 0, 12);
     lv_obj_set_style_text_color(setting_icon, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_align(setting_icon, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(setting_icon, LV_ALIGN_TOP_MID, 0, 25);
@@ -299,5 +424,26 @@ void btn_create_right_page2(lv_obj_t * parent)
     lv_obj_set_style_text_align(setting_title, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(setting_title, LV_ALIGN_BOTTOM_MID, 0, -16);
     lv_obj_add_event_cb(card_setting, btn_click_event_cb, LV_EVENT_CLICKED,
-                       (void *)(intptr_t)BTN_EVENT_SETTING);
+                        (void *)(intptr_t)BTN_EVENT_SETTING);
+}
+
+void btn_create_disconnected_right_page2(lv_obj_t * parent)
+{
+    lv_obj_t * card_auto = create_bucket_mode_btn_loose(parent, 160, 160, &auto_to_warehouse,
+                                                        &font_cn_28_3, "\xEE\x98\xB1", "自动回仓");
+    lv_obj_set_pos(card_auto, 0, 0);
+    lv_obj_add_event_cb(card_auto, btn_click_event_cb, LV_EVENT_CLICKED,
+                        (void *)(intptr_t)BTN_EVENT_DISCONNECTED_AUTO_WAREHOUSE);
+
+    lv_obj_t * card_locate = create_bucket_mode_btn_loose(parent, 160, 160, &mode3,
+                                                          &font_cn_28_2, "\xEE\x98\xA9", "定位");
+    lv_obj_set_pos(card_locate, 186, 0);
+    lv_obj_add_event_cb(card_locate, btn_click_event_cb, LV_EVENT_CLICKED,
+                        (void *)(intptr_t)BTN_EVENT_LOCATE);
+
+    lv_obj_t * card_setting = create_bucket_mode_btn(parent, 160, 160, &mode3,
+                                                     &font_cn_28_2, "\xEE\x98\x9B", "设置");
+    lv_obj_set_pos(card_setting, 0, 205);
+    lv_obj_add_event_cb(card_setting, btn_click_event_cb, LV_EVENT_CLICKED,
+                        (void *)(intptr_t)BTN_EVENT_SETTING);
 }

@@ -34,11 +34,12 @@ static int thread_run = 0;
 static uart_recv_cb_t user_cb = NULL;
 static pthread_mutex_t send_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-void serial_print_buf(unsigned char *buf, int len)
+void serial_print_buf(const char *direction, unsigned char *buf, int len)
 {
     int i;
     char hex_str[1024] = {0};
     char temp[8] = {0};
+    const char *tag = direction ? direction : "packet";
     
     // 打印字符串形式 (仅用于调试，注意二进制数据可能含有 \0) 
     // LV_LOG_USER("[UART] buf: %s", (char *)buf); 
@@ -47,15 +48,16 @@ void serial_print_buf(unsigned char *buf, int len)
         snprintf(temp, sizeof(temp), "%02X ", buf[i]);
         strcat(hex_str, temp);
     }
-    LV_LOG_USER("[UART] packet: %s", hex_str);
+    LV_LOG_USER("[UART] %s message: %s", tag, hex_str);
 }
 
 static int termios_init(struct termios *tios, int baud, int parity, int data_bits, int stop_bits)
 {
     speed_t baud_rate;
 
-    if (tios == NULL)
+    if (tios == NULL) {
         return -1;
+    }
 
     tios->c_line = 0;
 
@@ -70,23 +72,25 @@ static int termios_init(struct termios *tios, int baud, int parity, int data_bit
     /* configure the control modes... */
     tios->c_cflag = CREAD | CLOCAL;
 
-    if (data_bits == 5)
+    if (data_bits == 5) {
         tios->c_cflag |= CS5;
-    else if (data_bits == 6)
+    } else if (data_bits == 6) {
         tios->c_cflag |= CS6;
-    else if (data_bits == 7)
+    } else if (data_bits == 7) {
         tios->c_cflag |= CS7;
-    else if (data_bits == 8)
+    } else if (data_bits == 8) {
         tios->c_cflag |= CS8;
-    else
+    } else {
         return -1;
+    }
 
-    if (stop_bits == 1)
+    if (stop_bits == 1) {
         tios->c_cflag &= ~ CSTOPB;
-    else if (stop_bits == 2)
+    } else if (stop_bits == 2) {
         tios->c_cflag |= CSTOPB;
-    else
+    } else {
         return -1;
+    }
 
     if (parity == 0) { /* none */
         tios->c_cflag &= ~ PARENB;
@@ -104,35 +108,52 @@ static int termios_init(struct termios *tios, int baud, int parity, int data_bit
     } else if (parity == 4) { /* space */
         tios->c_cflag |= PARENB;
         tios->c_cflag |= CMSPAR;
-    } else
+    } else {
         return -1;
+    }
 
     /* configure the local modes... */
     tios->c_lflag = 0;    /* enable implementation-defined input processing   */
 
     /* Set the baud rate */
     switch (baud) {
-    case 110:    baud_rate = B110;    break;
-    case 300:    baud_rate = B300;    break;
-    case 600:    baud_rate = B600;    break;
-    case 1200:   baud_rate = B1200;   break;
-    case 2400:   baud_rate = B2400;   break;
-    case 4800:   baud_rate = B4800;   break;
-    case 9600:   baud_rate = B9600;   break;
-    case 19200:  baud_rate = B19200;  break;
-    case 38400:  baud_rate = B38400;  break;
-    case 57600:  baud_rate = B57600;  break;
-    case 115200: baud_rate = B115200; break;
-    case 230400: baud_rate = B230400; break;
-    case 460800: baud_rate = B460800; break;
-    case 576000: baud_rate = B576000; break;
-    case 921600: baud_rate = B921600; break;
-    default:
-        return -1;
+        case 110:
+            baud_rate = B110;    break;
+        case 300:
+            baud_rate = B300;    break;
+        case 600:
+            baud_rate = B600;    break;
+        case 1200:
+            baud_rate = B1200;   break;
+        case 2400:
+            baud_rate = B2400;   break;
+        case 4800:
+            baud_rate = B4800;   break;
+        case 9600:
+            baud_rate = B9600;   break;
+        case 19200:
+            baud_rate = B19200;  break;
+        case 38400:
+            baud_rate = B38400;  break;
+        case 57600:
+            baud_rate = B57600;  break;
+        case 115200:
+            baud_rate = B115200; break;
+        case 230400:
+            baud_rate = B230400; break;
+        case 460800:
+            baud_rate = B460800; break;
+        case 576000:
+            baud_rate = B576000; break;
+        case 921600:
+            baud_rate = B921600; break;
+        default:
+            return -1;
     }
 
-    if ((cfsetispeed(tios, baud_rate) < 0) || (cfsetospeed(tios, baud_rate) < 0))
+    if ((cfsetispeed(tios, baud_rate) < 0) || (cfsetospeed(tios, baud_rate) < 0)) {
         return -1;
+    }
     return 0;
 }
 
@@ -141,11 +162,13 @@ static int serial_open(const char *serial_name, int baud, int parity, int data_b
     struct termios settings;
     int fd;
 
-    if (serial_fd >= 0)
+    if (serial_fd >= 0) {
         return 0;
+    }
 
-    if ((fd = open(serial_name, O_RDWR | O_NOCTTY | O_NDELAY)) < 0)
+    if ((fd = open(serial_name, O_RDWR | O_NOCTTY | O_NDELAY)) < 0) {
         return 0;
+    }
 
     if (tcgetattr(fd, &old_tios) < 0) {
         close(fd);
@@ -169,8 +192,9 @@ static int serial_open(const char *serial_name, int baud, int parity, int data_b
 
 static int serial_close(void)
 {
-    if (serial_fd < 0)
+    if (serial_fd < 0) {
         return 0;
+    }
     tcsetattr(serial_fd, TCSANOW, &(old_tios));
     close(serial_fd);
     serial_fd = -1;
@@ -182,20 +206,23 @@ static int serial_read(unsigned char *buf, size_t size)
 {
     int readsize = 0;
 
-    if (size <= 0)
+    if (size <= 0) {
         return 0;
+    }
 
     readsize = read(serial_fd, buf, size);
     if (readsize > 0) {
         LV_LOG_USER("[UART] read: length=%d", readsize);
-        serial_print_buf(buf, readsize);
+        serial_print_buf("read", buf, readsize);
     }
     return readsize;
 }
 
 static int serial_poll(int timeout_ms)
 {
-    if (serial_fd < 0) return -1;
+    if (serial_fd < 0) {
+        return -1;
+    }
     
     fd_set rfds;
     struct timeval tv;
@@ -249,14 +276,15 @@ void uart_manager_register_cb(uart_recv_cb_t cb)
 
 int uart_manager_send(uint8_t *data, uint16_t len)
 {
-    if (serial_fd < 0)
+    if (serial_fd < 0) {
         return -1;
+    }
     pthread_mutex_lock(&send_mutex);
     int ret = write(serial_fd, data, len);
     pthread_mutex_unlock(&send_mutex);
     if (ret > 0) {
         LV_LOG_USER("[UART] sent %d bytes", ret);
-        serial_print_buf(data, ret);
+        serial_print_buf("send", data, ret);
     }
     return ret;
 }

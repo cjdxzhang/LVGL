@@ -87,13 +87,11 @@ static void btn_return_cb(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
     lv_obj_t *obj = lv_event_get_target(e);
-    if (code == LV_EVENT_CLICKED)
-    {
+    if (code == LV_EVENT_CLICKED) {
         intercom_homepage_ui_init();
         stop_player();
         rkadk_deinit();
-        if (kb)
-        {
+        if (kb) {
             lv_obj_del(kb);
             kb = NULL;
         }
@@ -183,52 +181,55 @@ static RKADK_VOID PlayerEventFnTest(RKADK_MW_PTR pPlayer,
                                     RKADK_PLAYER_EVENT_E enEvent,
                                     RKADK_VOID *pData)
 {
-    switch (enEvent)
-    {
-    case RKADK_PLAYER_EVENT_STATE_CHANGED:
-        printf("+++++ RKADK_PLAYER_EVENT_STATE_CHANGED +++++\n");
-        break;
-    case RKADK_PLAYER_EVENT_EOF:
-        printf("+++++ RKADK_PLAYER_EVENT_EOF +++++\n");
-        current_state = RKADK_PLAYER_STATE_STOP;
-        if (desired_state == RKADK_PLAYER_STATE_STOP)
+    switch (enEvent) {
+        case RKADK_PLAYER_EVENT_STATE_CHANGED:
+            printf("+++++ RKADK_PLAYER_EVENT_STATE_CHANGED +++++\n");
+            break;
+        case RKADK_PLAYER_EVENT_EOF:
+            printf("+++++ RKADK_PLAYER_EVENT_EOF +++++\n");
+            current_state = RKADK_PLAYER_STATE_STOP;
+            if (desired_state == RKADK_PLAYER_STATE_STOP) {
+                desired_state = RKADK_PLAYER_STATE_BUTT;
+            }
+            break;
+        case RKADK_PLAYER_EVENT_SOF:
+            printf("+++++ RKADK_PLAYER_EVENT_SOF +++++\n");
+            break;
+        case RKADK_PLAYER_EVENT_SEEK_END:
+            printf("+++++ RKADK_PLAYER_EVENT_SEEK_END +++++\n");
+            break;
+        case RKADK_PLAYER_EVENT_ERROR:
+            printf("+++++ RKADK_PLAYER_EVENT_ERROR +++++\n");
+            current_state = RKADK_PLAYER_STATE_STOP;
+            if (desired_state != RKADK_PLAYER_STATE_BUTT) {
+                desired_state = RKADK_PLAYER_STATE_BUTT;
+            }
+            break;
+        case RKADK_PLAYER_EVENT_PREPARED:
+            printf("+++++ RKADK_PLAYER_EVENT_PREPARED +++++\n");
+            break;
+        case RKADK_PLAYER_EVENT_PLAY:
+            printf("+++++ RKADK_PLAYER_EVENT_PLAY +++++\n");
+            current_state = RKADK_PLAYER_STATE_PLAY;
+            if (desired_state == RKADK_PLAYER_STATE_PLAY) {
+                desired_state = RKADK_PLAYER_STATE_BUTT;
+            }
+            break;
+        case RKADK_PLAYER_EVENT_PAUSED:
+            printf("+++++ RKADK_PLAYER_EVENT_PAUSED +++++\n");
+            current_state = RKADK_PLAYER_STATE_PAUSE;
+            if (desired_state == RKADK_PLAYER_STATE_PAUSE) {
+                desired_state = RKADK_PLAYER_STATE_BUTT;
+            }
+            break;
+        case RKADK_PLAYER_EVENT_STOPPED:
+            printf("+++++ RKADK_PLAYER_EVENT_STOPPED +++++\n");
+            current_state = RKADK_PLAYER_STATE_STOP;
             desired_state = RKADK_PLAYER_STATE_BUTT;
-        break;
-    case RKADK_PLAYER_EVENT_SOF:
-        printf("+++++ RKADK_PLAYER_EVENT_SOF +++++\n");
-        break;
-    case RKADK_PLAYER_EVENT_SEEK_END:
-        printf("+++++ RKADK_PLAYER_EVENT_SEEK_END +++++\n");
-        break;
-    case RKADK_PLAYER_EVENT_ERROR:
-        printf("+++++ RKADK_PLAYER_EVENT_ERROR +++++\n");
-        current_state = RKADK_PLAYER_STATE_STOP;
-        if (desired_state != RKADK_PLAYER_STATE_BUTT)
-            desired_state = RKADK_PLAYER_STATE_BUTT;
-        break;
-    case RKADK_PLAYER_EVENT_PREPARED:
-        printf("+++++ RKADK_PLAYER_EVENT_PREPARED +++++\n");
-        break;
-    case RKADK_PLAYER_EVENT_PLAY:
-        printf("+++++ RKADK_PLAYER_EVENT_PLAY +++++\n");
-        current_state = RKADK_PLAYER_STATE_PLAY;
-        if (desired_state == RKADK_PLAYER_STATE_PLAY)
-            desired_state = RKADK_PLAYER_STATE_BUTT;
-        break;
-    case RKADK_PLAYER_EVENT_PAUSED:
-        printf("+++++ RKADK_PLAYER_EVENT_PAUSED +++++\n");
-        current_state = RKADK_PLAYER_STATE_PAUSE;
-        if (desired_state == RKADK_PLAYER_STATE_PAUSE)
-            desired_state = RKADK_PLAYER_STATE_BUTT;
-        break;
-    case RKADK_PLAYER_EVENT_STOPPED:
-        printf("+++++ RKADK_PLAYER_EVENT_STOPPED +++++\n");
-        current_state = RKADK_PLAYER_STATE_STOP;
-        desired_state = RKADK_PLAYER_STATE_BUTT;
-        break;
-    default:
-        printf("+++++ Unknown event(%d) +++++\n", enEvent);
-        break;
+            break;
+        default:
+            printf("+++++ Unknown event(%d) +++++\n", enEvent);
+            break;
     }
 }
 
@@ -241,10 +242,12 @@ static void rkadk_init(void)
     param_init(&stPlayCfg.stFrmInfo);
     stPlayCfg.bEnableAudio = false;
     stPlayCfg.bEnableVideo = false;
-    if (bAudioEnable)
+    if (bAudioEnable) {
         stPlayCfg.bEnableAudio = true;
-    if (bVideoEnable)
+    }
+    if (bVideoEnable) {
         stPlayCfg.bEnableVideo = true;
+    }
     stPlayCfg.stNetStreamCfg.u32IoTimeout = 3 * 1000 * 1000;
     stPlayCfg.stAudioCfg.pSoundCard = "default";
     stPlayCfg.stAudioCfg.u32SpeakerVolume = 70;
@@ -254,8 +257,7 @@ static void rkadk_init(void)
     stPlayCfg.stVdecCfg.u32FrameBufCnt = 4;
 
     RK_MPI_VO_SetLayerFlush(-1);
-    if (RKADK_PLAYER_Create(&pPlayer, &stPlayCfg))
-    {
+    if (RKADK_PLAYER_Create(&pPlayer, &stPlayCfg)) {
         printf("rkadk: RKADK_PLAYER_Create failed\n");
         return;
     }
@@ -263,28 +265,24 @@ static void rkadk_init(void)
 
 static void *rtsp_play(void *arg)
 {
-    if (pPlayer != NULL)
-    {
+    if (pPlayer != NULL) {
         printf("video_name_callback: stop and deinit pPlayer\n");
         RKADK_PLAYER_Stop(pPlayer);
         rkadk_deinit();
     }
-    if (pPlayer == NULL)
-    {
+    if (pPlayer == NULL) {
         printf("video_name_callback: rkadk_init pPlayer\n");
         rkadk_init();
     }
     strcpy(rtsp_address, lv_textarea_get_text(ui_rtsp_addr));
     int ret = RKADK_PLAYER_SetDataSource(pPlayer, rtsp_address);
-    if (ret)
-    {
+    if (ret) {
         printf("rkadk: SetDataSource failed, ret = %d\n", ret);
         return NULL;
     }
     printf("RKADK_PLAYER_SetDataSource\n");
     ret = RKADK_PLAYER_Prepare(pPlayer);
-    if (ret)
-    {
+    if (ret) {
         printf("rkadk: Prepare failed, ret = %d\n", ret);
         return NULL;
     }
@@ -303,8 +301,7 @@ static void *rtsp_play(void *arg)
 
 static void stop_player(void)
 {
-    if (video_thread)
-    {
+    if (video_thread) {
         RKADK_PLAYER_Stop(pPlayer);
         pthread_join(video_thread, NULL);
         video_thread = 0;
@@ -322,19 +319,15 @@ static void rtsp_play_start_callback(lv_event_t *event)
 {
     printf("%s in\n", __func__);
 
-    if (is_network_enable())
-    {
-        if (desired_state != RKADK_PLAYER_STATE_BUTT)
-        {
+    if (is_network_enable()) {
+        if (desired_state != RKADK_PLAYER_STATE_BUTT) {
             printf("Waiting player handled last state, ignore\n");
             return;
         }
         stop_player();
         current_state = RKADK_PLAYER_STATE_IDLE;
         pthread_create(&video_thread, NULL, rtsp_play, NULL);
-    }
-    else
-    {
+    } else {
         printf("network disable\n");
     }
 }
@@ -343,24 +336,18 @@ static void rtsp_play_pause_callback(lv_event_t *event)
 {
     printf("%s in\n", __func__);
 
-    if (!video_thread)
-    {
+    if (!video_thread) {
         rtsp_play_start_callback(event);
         return;
     }
 
-    if (current_state == RKADK_PLAYER_STATE_PLAY)
-    {
-        if (desired_state != RKADK_PLAYER_STATE_PAUSE)
-        {
+    if (current_state == RKADK_PLAYER_STATE_PLAY) {
+        if (desired_state != RKADK_PLAYER_STATE_PAUSE) {
             desired_state = RKADK_PLAYER_STATE_PAUSE;
             RKADK_PLAYER_Pause(pPlayer);
         }
-    }
-    else
-    {
-        if (desired_state != RKADK_PLAYER_STATE_PLAY)
-        {
+    } else {
+        if (desired_state != RKADK_PLAYER_STATE_PLAY) {
             desired_state = RKADK_PLAYER_STATE_PLAY;
             RKADK_PLAYER_Play(pPlayer);
         }
@@ -371,8 +358,7 @@ static void kb_cb(lv_event_t *e)
 {
     lv_obj_t *obj = lv_event_get_target(e);
 
-    if (ui_rtsp_addr_float)
-    {
+    if (ui_rtsp_addr_float) {
         lv_textarea_set_text(ui_rtsp_addr,
                              lv_textarea_get_text(ui_rtsp_addr_float));
         lv_obj_del(ui_rtsp_addr_float);
@@ -389,8 +375,9 @@ static void rtsp_addr_set(lv_event_t *e)
     lv_area_t kb_area;
     lv_area_t res_area;
 
-    if (kb)
+    if (kb) {
         return;
+    }
 
     kb = lv_keyboard_create(lv_layer_sys());
     lv_obj_set_size(kb, lv_pct(100), lv_pct(30));
@@ -406,8 +393,7 @@ static void rtsp_addr_set(lv_event_t *e)
     lv_obj_refr_pos(kb);
     lv_obj_get_coords(kb, &kb_area);
 
-    if (_lv_area_intersect(&res_area, &addr_area, &kb_area))
-    {
+    if (_lv_area_intersect(&res_area, &addr_area, &kb_area)) {
         ui_rtsp_addr_float = lv_textarea_create(lv_layer_sys());
         lv_obj_set_width(ui_rtsp_addr_float, lv_pct(100));
         lv_obj_add_state(ui_rtsp_addr_float, LV_STATE_FOCUSED);
@@ -422,21 +408,16 @@ static void rtsp_addr_set(lv_event_t *e)
         lv_obj_add_style(ui_rtsp_addr_float, &style_txt_m, LV_PART_MAIN);
         lv_keyboard_set_textarea(kb, ui_rtsp_addr_float);
         lv_obj_align_to(ui_rtsp_addr_float, kb, LV_ALIGN_OUT_TOP_MID, 0, 0);
-    }
-    else
-    {
+    } else {
         lv_keyboard_set_textarea(kb, ui_rtsp_addr);
     }
 }
 
 static void rtsp_setting_callback(lv_event_t *e)
 {
-    if (lv_obj_has_flag(ui_setting_box, LV_OBJ_FLAG_HIDDEN))
-    {
+    if (lv_obj_has_flag(ui_setting_box, LV_OBJ_FLAG_HIDDEN)) {
         lv_obj_clear_flag(ui_setting_box, LV_OBJ_FLAG_HIDDEN);
-    }
-    else
-    {
+    } else {
         lv_obj_add_flag(ui_setting_box, LV_OBJ_FLAG_HIDDEN);
         RK_MPI_VO_SetLayerFlush(-1);
     }
@@ -448,7 +429,9 @@ static void ui_ratio_cb(lv_event_t *e)
     lv_obj_t *act_cb = lv_event_get_target(e);
     lv_obj_t *old_cb = lv_obj_get_child(cont, scale_mode + 1);
 
-    if (act_cb == cont) return;
+    if (act_cb == cont) {
+        return;
+    }
 
     lv_obj_clear_state(old_cb, LV_STATE_CHECKED);
     lv_obj_add_state(act_cb, LV_STATE_CHECKED);
@@ -473,13 +456,13 @@ static void ui_update_state(lv_timer_t *timer)
 {
     static RKADK_PLAYER_STATE_E last_state = RKADK_PLAYER_STATE_BUTT;
 
-    if (last_state != current_state)
-    {
+    if (last_state != current_state) {
         last_state = current_state;
-        if (current_state == RKADK_PLAYER_STATE_PLAY)
+        if (current_state == RKADK_PLAYER_STATE_PLAY) {
             lv_label_set_text(ui_pause_label, "暂停");
-        else
+        } else {
             lv_label_set_text(ui_pause_label, "播放");
+        }
     }
 }
 
@@ -505,8 +488,7 @@ static void calc_video_area(void)
     video_cont_w = lv_area_get_width(&video_area);
     video_cont_h = lv_area_get_height(&video_area);
 
-    if (scale_mode == SCALE_FULL)
-    {
+    if (scale_mode == SCALE_FULL) {
 #if USE_RK3506
         video_img_w = video_cont_w;
         video_img_h = video_cont_h;
@@ -514,29 +496,19 @@ static void calc_video_area(void)
         video_img_w = 720;
         video_img_h = 512;
 #endif
-    }
-    else if (scale_mode == SCALE_4_3)
-    {
-        if ((video_cont_w * 3.0 / video_cont_h) < 4.0)
-        {
+    } else if (scale_mode == SCALE_4_3) {
+        if ((video_cont_w * 3.0 / video_cont_h) < 4.0) {
             video_img_w = video_cont_w;
             video_img_h = video_img_w * 3.0 / 4.0;
-        }
-        else
-        {
+        } else {
             video_img_h = video_cont_h;
             video_img_w = video_img_h * 4.0 / 3.0;
         }
-    }
-    else if (scale_mode == SCALE_16_9)
-    {
-        if ((video_cont_w * 9.0 / video_cont_h) < 16.0)
-        {
+    } else if (scale_mode == SCALE_16_9) {
+        if ((video_cont_w * 9.0 / video_cont_h) < 16.0) {
             video_img_w = video_cont_w;
             video_img_h = video_img_w * 9.0 / 16.0;
-        }
-        else
-        {
+        } else {
             video_img_h = video_cont_h;
             video_img_w = video_img_h * 16.0 / 9.0;
         }
@@ -562,8 +534,9 @@ void monitor_ui_init()
 
     rk_demo_bg_hide();
 
-    if (main)
+    if (main) {
         return;
+    }
 
     RK_MPI_VO_SetLayerFlush(-1);
     style_init();
@@ -668,8 +641,7 @@ void monitor_ui_init()
     lv_obj_refr_pos(ui_control_box);
     lv_obj_get_coords(ui_control_box, &btn_area);
 
-    if (btn_area.y2 > (scr_h - 1))
-    {
+    if (btn_area.y2 > (scr_h - 1)) {
         lv_obj_set_width(ui_rtsp_addr, lv_pct(50));
         lv_obj_set_width(ui_control_box, lv_pct(50));
     }
@@ -688,8 +660,9 @@ void monitor_ui_init()
     ui_checkbox_audio = lv_checkbox_create(ui_setting_box);
     lv_checkbox_set_text(ui_checkbox_audio, "音频");
     lv_obj_add_style(ui_checkbox_audio, &style_txt_m, LV_PART_MAIN);
-    if (bAudioEnable)
+    if (bAudioEnable) {
         lv_obj_add_state(ui_checkbox_audio, LV_STATE_CHECKED);
+    }
     lv_obj_add_event_cb(ui_checkbox_audio, ui_checkbox_cb,
                         LV_EVENT_VALUE_CHANGED, &bAudioEnable);
 
@@ -714,8 +687,9 @@ void monitor_ui_init()
                             LV_PART_INDICATOR);
     lv_obj_set_style_bg_img_src(ui_checkbox_ratio_4_3, NULL,
                                 LV_PART_INDICATOR | LV_STATE_CHECKED);
-    if (scale_mode == SCALE_4_3)
+    if (scale_mode == SCALE_4_3) {
         lv_obj_add_state(ui_checkbox_ratio_4_3, LV_STATE_CHECKED);
+    }
     lv_obj_refr_size(ui_checkbox_ratio_4_3);
     lv_obj_refr_pos(ui_checkbox_ratio_4_3);
 
@@ -727,8 +701,9 @@ void monitor_ui_init()
                             LV_PART_INDICATOR);
     lv_obj_set_style_bg_img_src(ui_checkbox_ratio_16_9, NULL,
                                 LV_PART_INDICATOR | LV_STATE_CHECKED);
-    if (scale_mode == SCALE_16_9)
+    if (scale_mode == SCALE_16_9) {
         lv_obj_add_state(ui_checkbox_ratio_16_9, LV_STATE_CHECKED);
+    }
     lv_obj_refr_size(ui_checkbox_ratio_16_9);
     lv_obj_refr_pos(ui_checkbox_ratio_16_9);
 
@@ -740,8 +715,9 @@ void monitor_ui_init()
                             LV_PART_INDICATOR);
     lv_obj_set_style_bg_img_src(ui_checkbox_stretch, NULL,
                                 LV_PART_INDICATOR | LV_STATE_CHECKED);
-    if (scale_mode == SCALE_FULL)
+    if (scale_mode == SCALE_FULL) {
         lv_obj_add_state(ui_checkbox_stretch, LV_STATE_CHECKED);
+    }
     lv_obj_refr_size(ui_checkbox_stretch);
     lv_obj_refr_pos(ui_checkbox_stretch);
     lv_obj_refr_size(ui_checkbox_ratio_box);
@@ -766,4 +742,3 @@ void monitor_ui_init()
     timer_state = lv_timer_create(ui_update_state, 200, NULL);
 }
 #endif
-

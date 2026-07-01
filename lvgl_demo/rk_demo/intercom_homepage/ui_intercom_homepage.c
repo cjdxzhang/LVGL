@@ -64,8 +64,7 @@ static void page_switch(lv_event_t *e)
 {
     void (*func)(void) = lv_event_get_user_data(e);
 
-    if (func)
-    {
+    if (func) {
         func();
         lv_obj_del(main);
         main = NULL;
@@ -108,8 +107,7 @@ static void btn_return_cb(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
     lv_obj_t *obj = lv_event_get_target(e);
-    if (code == LV_EVENT_CLICKED)
-    {
+    if (code == LV_EVENT_CLICKED) {
         home_ui_init();
         lv_obj_del(main);
         main = NULL;
@@ -123,8 +121,9 @@ void intercom_homepage_ui_init()
     int cnt = 0;
     int idx = 0;
 
-    if (main)
+    if (main) {
         return;
+    }
 
     main = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(main);
@@ -152,8 +151,9 @@ void intercom_homepage_ui_init()
         while (idx != apps)
         {
             tl_item = tile_layout_new_item(tl, 1, 1, 0);
-            if (!tl_item)
+            if (!tl_item) {
                 break;
+            }
             app_init(tl_item, &private[idx]);
             idx++;
         }

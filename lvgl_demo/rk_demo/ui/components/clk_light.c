@@ -1,5 +1,6 @@
 #include "clk_light.h"
 #include "top_status.h"
+#include "ui_time.h"
 
 LV_IMAGE_DECLARE(q0ULJ1);
 LV_FONT_DECLARE(sleep_cn);
@@ -17,6 +18,9 @@ static lv_event_cb_t s_home_cb = NULL;
 static void apply_panel_style(lv_obj_t * obj);
 static void apply_side_btn_style(lv_obj_t * obj);
 static lv_obj_t * create_switch_row(lv_obj_t * parent, lv_coord_t y, const char * text, bool checked);
+static void update_time_label(lv_obj_t * label);
+static void time_timer_cb(lv_timer_t * timer);
+static void time_label_delete_cb(lv_event_t * e);
 static void back_btn_event_cb(lv_event_t * e);
 static void home_btn_event_cb(lv_event_t * e);
 
@@ -93,10 +97,12 @@ lv_obj_t * clk_light_create(lv_obj_t * parent)
     lv_obj_align(label, LV_ALIGN_LEFT_MID, 0, 0);
 
     lv_obj_t * time_txt = lv_label_create(row3);
-    lv_label_set_text(time_txt, "2026-03-10 16:00");
     lv_obj_set_style_text_font(time_txt, &sleep_cn, 0);
     lv_obj_set_style_text_color(time_txt, lv_color_hex(0x8E77A9), 0);
     lv_obj_align(time_txt, LV_ALIGN_RIGHT_MID, -40, 0);
+    update_time_label(time_txt);
+    lv_timer_t * time_timer = lv_timer_create(time_timer_cb, 1000, time_txt);
+    lv_obj_add_event_cb(time_txt, time_label_delete_cb, LV_EVENT_DELETE, time_timer);
 
     lv_obj_t * sync_icon = lv_label_create(row3);
     lv_label_set_text(sync_icon, LV_SYMBOL_REFRESH);
@@ -152,7 +158,7 @@ static lv_obj_t * create_switch_row(lv_obj_t * parent, lv_coord_t y, const char 
     lv_obj_align(label, LV_ALIGN_LEFT_MID, 0, 0);
 
     lv_obj_t * sw = lv_switch_create(row);
-    if(checked) {
+    if (checked) {
         lv_obj_add_state(sw, LV_STATE_CHECKED);
     }
     lv_obj_set_size(sw, 52, 28);
@@ -162,6 +168,37 @@ static lv_obj_t * create_switch_row(lv_obj_t * parent, lv_coord_t y, const char 
     lv_obj_align(sw, LV_ALIGN_RIGHT_MID, 0, 0);
 
     return row;
+}
+
+static void update_time_label(lv_obj_t * label)
+{
+    char text[UI_TIME_TEXT_LEN];
+
+    if (label == NULL) {
+        return;
+    }
+    if (!ui_time_format_now(text, sizeof(text))) {
+        return;
+    }
+    lv_label_set_text(label, text);
+}
+
+static void time_timer_cb(lv_timer_t * timer)
+{
+    if (timer == NULL) {
+        return;
+    }
+    update_time_label((lv_obj_t *)timer->user_data);
+}
+
+static void time_label_delete_cb(lv_event_t * e)
+{
+    lv_timer_t * timer = (lv_timer_t *)lv_event_get_user_data(e);
+
+    if (timer == NULL) {
+        return;
+    }
+    lv_timer_del(timer);
 }
 
 static void apply_panel_style(lv_obj_t * obj)
@@ -202,22 +239,22 @@ static void apply_side_btn_style(lv_obj_t * obj)
 
 static void back_btn_event_cb(lv_event_t * e)
 {
-    if(lv_event_get_code(e) != LV_EVENT_CLICKED) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
         return;
     }
 
-    if(s_back_cb) {
+    if (s_back_cb) {
         s_back_cb(e);
     }
 }
 
 static void home_btn_event_cb(lv_event_t * e)
 {
-    if(lv_event_get_code(e) != LV_EVENT_CLICKED) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
         return;
     }
 
-    if(s_home_cb) {
+    if (s_home_cb) {
         s_home_cb(e);
     }
 }

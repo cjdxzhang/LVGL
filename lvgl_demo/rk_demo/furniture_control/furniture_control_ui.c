@@ -110,8 +110,9 @@ void furniture_control_ui_init(void)
 {
     lv_area_t area;
 
-    if (main)
+    if (main) {
         return;
+    }
 
     main = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(main);
@@ -141,10 +142,11 @@ void furniture_control_ui_init(void)
     lv_img_set_offset_y(v_bg, -area.y1);
     lv_obj_clear_flag(v_bg, LV_OBJ_FLAG_SCROLLABLE);
 
-    if (scr_dir == LV_DIR_HOR)
+    if (scr_dir == LV_DIR_HOR) {
         btn_desc.gap = RK_PCT_H(5);
-    else
+    } else {
         btn_desc.gap = RK_PCT_W(2);
+    }
 
     ui_box_main = ui_btnmatrix_create(v_bg, &btn_desc);
     lv_obj_center(ui_box_main);

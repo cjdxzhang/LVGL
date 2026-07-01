@@ -3,6 +3,7 @@
 start() {
 	set -a
 	export LV_DRIVERS_SET_PLANE=CURSOR
+	export TZ=CST-8
 	ulimit -n 1024
 	set +a
 	rk_demo &

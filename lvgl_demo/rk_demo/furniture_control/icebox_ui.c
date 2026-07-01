@@ -38,8 +38,9 @@ void icebox_ui_init(void)
 {
     lv_area_t area;
 
-    if (main)
+    if (main) {
         return;
+    }
 
     main = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(main);

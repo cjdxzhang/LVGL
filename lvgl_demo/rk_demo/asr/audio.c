@@ -34,8 +34,9 @@ static int running = 0;
 void cmd_answer(int cmd)
 {
     int ret = write(pipe_fd[1], &cmd, sizeof(cmd));
-    if (ret <= 0)
+    if (ret <= 0) {
         printf("%s failed %d\n", ret);
+    }
 }
 
 static char *answer_pcm[] =
@@ -55,23 +56,20 @@ void alsa_open(snd_pcm_t **handle, char *name, int channels, uint32_t rate,
 {
     snd_pcm_hw_params_t *hw_params;
     int err;
-    if ((err = snd_pcm_open(handle, name, stream, 0)) < 0)
-    {
+    if ((err = snd_pcm_open(handle, name, stream, 0)) < 0) {
         fprintf(stderr, "cannot open audio device %s %d(%s)\n", name, stream,
                 snd_strerror(err));
         exit(1);
     }
 
-    if ((err = snd_pcm_hw_params_malloc(&hw_params)) < 0)
-    {
+    if ((err = snd_pcm_hw_params_malloc(&hw_params)) < 0) {
         fprintf(stderr, "cannot allocate hardware parameter structure %s %d(%s)\n",
                 name, stream,
                 snd_strerror(err));
         exit(1);
     }
 
-    if ((err = snd_pcm_hw_params_any(*handle, hw_params)) < 0)
-    {
+    if ((err = snd_pcm_hw_params_any(*handle, hw_params)) < 0) {
         fprintf(stderr, "cannot initialize hardware parameter structure %s %d(%s)\n",
                 name, stream,
                 snd_strerror(err));
@@ -79,45 +77,39 @@ void alsa_open(snd_pcm_t **handle, char *name, int channels, uint32_t rate,
     }
 
     if ((err = snd_pcm_hw_params_set_access(*handle, hw_params,
-                                            SND_PCM_ACCESS_RW_INTERLEAVED)) < 0)
-    {
+                                            SND_PCM_ACCESS_RW_INTERLEAVED)) < 0) {
         fprintf(stderr, "cannot set access type %s %d(%s)\n", name, stream,
                 snd_strerror(err));
         exit(1);
     }
 
-    if ((err = snd_pcm_hw_params_set_format(*handle, hw_params, format)) < 0)
-    {
+    if ((err = snd_pcm_hw_params_set_format(*handle, hw_params, format)) < 0) {
         fprintf(stderr, "cannot set sample format %s %d(%s)\n", name, stream,
                 snd_strerror(err));
         exit(1);
     }
 
     fprintf(stdout, "hw_params format set\n");
-    if ((err = snd_pcm_hw_params_set_rate_near(*handle, hw_params, &rate, 0)) < 0)
-    {
+    if ((err = snd_pcm_hw_params_set_rate_near(*handle, hw_params, &rate, 0)) < 0) {
         fprintf(stderr, "cannot set sample rate %s %d(%s)\n", name, stream,
                 snd_strerror(err));
         exit(1);
     }
 
-    if ((err = snd_pcm_hw_params_set_channels(*handle, hw_params, channels)) < 0)
-    {
+    if ((err = snd_pcm_hw_params_set_channels(*handle, hw_params, channels)) < 0) {
         fprintf(stderr, "cannot set channel count %s %d(%s)\n", name, stream,
                 snd_strerror(err));
         exit(1);
     }
 #if 0
     if ((err = snd_pcm_hw_params_set_period_size(*handle, hw_params, PERIOD_SIZE,
-               0)) < 0)
-    {
+                                                 0)) < 0) {
         fprintf(stderr, "cannot set period size %s %d(%s)\n", name, stream,
                 snd_strerror(err));
         exit(1);
     }
 #endif
-    if ((err = snd_pcm_hw_params(*handle, hw_params)) < 0)
-    {
+    if ((err = snd_pcm_hw_params(*handle, hw_params)) < 0) {
         fprintf(stderr, "cannot set parameters %s %d(%s)\n", name, stream,
                 snd_strerror(err));
         exit(1);
@@ -144,20 +136,22 @@ static void *doplay(void *arg)
     while (running)
     {
         int num = read(pipe_fd[0], &play_cmd, sizeof(int));
-        if (!running)
+        if (!running) {
             break;
+        }
         last_cmd = play_cmd;
         play_cmd = -1;
 
-        if (last_cmd > sizeof(answer_pcm) / sizeof(answer_pcm[0]))
+        if (last_cmd > sizeof(answer_pcm) / sizeof(answer_pcm[0])) {
             continue;
+        }
         printf("%s\n", answer_pcm[last_cmd]);
         fd = fopen(answer_pcm[last_cmd], "rb");
-        if (!fd)
+        if (!fd) {
             continue;
+        }
 
-        if ((err = snd_pcm_prepare(phandle)) < 0)
-        {
+        if ((err = snd_pcm_prepare(phandle)) < 0) {
             fprintf(stderr, "cannot prepare audio interface for use (%s)\n",
                     snd_strerror(err));
             fclose(fd);
@@ -168,11 +162,11 @@ static void *doplay(void *arg)
         {
             memset(buf, 0, PERIOD_SIZE * 2 * 2);
             res = fread(buf, 1, PERIOD_SIZE * 2 * 2, fd);
-            if (res <= 0)
+            if (res <= 0) {
                 break;
+            }
             res = snd_pcm_writei(phandle, buf, PERIOD_SIZE);
-            if (res <= 0)
-            {
+            if (res <= 0) {
                 printf("%s snd_pcm_readi error %d, continue\n", __func__, res);
                 snd_pcm_prepare(phandle);
                 snd_pcm_writei(phandle, buf, PERIOD_SIZE);
@@ -202,8 +196,7 @@ static void *docap(void *arg)
     alsa_open(&handle, CAPTURE_CARD, 2, INPUT_SAMPLE_RATE,
               SND_PCM_FORMAT_S16_LE,
               SND_PCM_STREAM_CAPTURE);
-    if ((err = snd_pcm_prepare(handle)) < 0)
-    {
+    if ((err = snd_pcm_prepare(handle)) < 0) {
         fprintf(stderr, "cannot prepare audio interface for use (%s)\n",
                 snd_strerror(err));
         handle = NULL;
@@ -223,7 +216,7 @@ static void *docap(void *arg)
 #else
     printf("rkaudio_preprocess_init_by_conf\n");
     st_ptr = rkaudio_preprocess_init_by_conf(INPUT_SAMPLE_RATE, INPUT_BITS, 2, 0,
-             "/usr/vqefiles/config_wakeup.json");
+                                             "/usr/vqefiles/config_wakeup.json");
 #endif
 
     short *out = (short *)malloc(IN_SIZE * 2 * sizeof(short));
@@ -241,47 +234,43 @@ static void *docap(void *arg)
              INPUT_SAMPLE_RATE, INPUT_BITS, 2);
     while (running)
     {
-        if (!fd && (access("/tmp/asrdump", F_OK) == 0))
+        if (!fd && (access("/tmp/asrdump", F_OK) == 0)) {
             fd = fopen(path, "wb+");
-        if (fd && (access("/tmp/asrdump", F_OK) != 0))
-        {
+        }
+        if (fd && (access("/tmp/asrdump", F_OK) != 0)) {
             fclose(fd);
             fd = NULL;
         }
         int res = snd_pcm_readi(handle, buf, PERIOD_SIZE);
-        if (res <= 0)
-        {
+        if (res <= 0) {
             printf("%s snd_pcm_readi error %d, continue\n", __func__, res);
             snd_pcm_prepare(handle);
             continue;
         }
-        if (fd)
+        if (fd) {
             fwrite(in, 2, in_size, fd);
+        }
         out_size = rkaudio_preprocess_short(st_ptr, (short *)in, out, in_size,
                                             &wakeup_status);
         int32_t tmpstatus = (int32_t)wakeup_status;
         int32_t real_wakeup_status = tmpstatus & 0xfff;
-        if (real_wakeup_status >= 1)
-        {
+        if (real_wakeup_status >= 1) {
             frame_cot = 375;// 6s timeout
             num_wakeup = num_wakeup + 1;
             printf("\nWakeup [%d].\n", num_wakeup);
             wakeup_status = wakeup_status >> 11 << 11;
             asr_update(0);
         }
-        if (frame_cot > 0)
-        {
+        if (frame_cot > 0) {
             frame_cot--;
             rkaudio_preprocess_get_cmd_id(st_ptr, &cmd_score, &cmd_id);
-            if (cmd_id != 0)
-            {
+            if (cmd_id != 0) {
                 printf("\ncmd=%d\n", cmd_id);
-                if (frame_cot < 480)
+                if (frame_cot < 480) {
                     asr_update(cmd_id);
+                }
                 frame_cot = 500;
-            }
-            else if (frame_cot == 0)
-            {
+            } else if (frame_cot == 0) {
                 printf("\nIdle, sleep now\n");
                 wakeup_status = 0;
                 asr_update(-1);
@@ -290,8 +279,9 @@ static void *docap(void *arg)
             }
         }
     }
-    if (fd)
+    if (fd) {
         fclose(fd);
+    }
     asr_update(-1);
     rkaudio_preprocess_destory(st_ptr);
     free(buf);
@@ -305,24 +295,26 @@ static void *docap(void *arg)
 void asr_audio_init(void)
 {
     int ret = pipe(pipe_fd);
-    if (ret != 0)
-    {
+    if (ret != 0) {
         printf("asr init failed\n");
         return;
     }
 
     printf_asr_cmds();
     running = 1;
-    if (pthread_create(&ptid_c, NULL, docap, NULL))
+    if (pthread_create(&ptid_c, NULL, docap, NULL)) {
         printf("asr thread create failed\n");
-    if (pthread_create(&ptid_p, NULL, doplay, NULL))
+    }
+    if (pthread_create(&ptid_p, NULL, doplay, NULL)) {
         printf("asr thread create failed\n");
+    }
 }
 
 void asr_audio_deinit(void)
 {
-    if (running == 0)
+    if (running == 0) {
         return;
+    }
 
     running = 0;
     cmd_answer(INT_MAX);

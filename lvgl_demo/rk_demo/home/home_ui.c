@@ -35,35 +35,6 @@ static lv_img_dsc_t *bg_snapshot = NULL;
 static void page_switch(lv_event_t *e);
 static void date_update(lv_timer_t *timer);
 
-static void handle_bucket_footbath(const protocol_frame_t *frame)
-{
-    LV_LOG_USER("[HOME] footbath: water=%d temp=%d massage=%d",
-                frame->bucket_water, frame->bucket_temp, frame->bucket_massage);
-}
-
-static void handle_bucket_standby(const protocol_frame_t *frame)
-{
-    LV_LOG_USER("[HOME] bucket standby");
-}
-
-static void handle_bucket_selfcheck(const protocol_frame_t *frame)
-{
-    LV_LOG_USER("[HOME] bucket selfcheck: status=%d", frame->bucket_main_status);
-}
-
-static void handle_base_selfclean(const protocol_frame_t *frame)
-{
-    LV_LOG_USER("[HOME] base selfclean");
-}
-
-static void register_proto_handlers(void)
-{
-    protocol_register_cmd(CMD_BUCKET_FOOTBATH,  handle_bucket_footbath);
-    protocol_register_cmd(CMD_BUCKET_STANDBY,   handle_bucket_standby);
-    protocol_register_cmd(CMD_BUCKET_SELFCHECK, handle_bucket_selfcheck);
-    protocol_register_cmd(CMD_BASE_SELFCLEAN,   handle_base_selfclean);
-}
-
 static struct btn_desc home_btn[] =
 {
 #if SMART_HOME
@@ -129,8 +100,7 @@ static void page_switch(lv_event_t *e)
 {
     void (*func)(void) = lv_event_get_user_data(e);
 
-    if (func)
-    {
+    if (func) {
         LV_LOG_USER("build button pressed!");
 
         protocol_frame_t frame = {
@@ -164,12 +134,9 @@ static void date_update(lv_timer_t *timer)
     lv_obj_align_to(ui_label_date, ui_label_time, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 0);
 
 #if WIFIBT_EN
-    if (wifi_connected())
-    {
+    if (wifi_connected()) {
         lv_img_set_src(ui_wifi, IMG_WIFI_ON);
-    }
-    else
-    {
+    } else {
         lv_img_set_src(ui_wifi, IMG_WIFI_OFF);
     }
 #endif
@@ -179,12 +146,12 @@ void bg_pic_snapshot_blur(void)
 {
     lv_draw_rect_dsc_t dsc;
 
-    if (bg_snapshot)
+    if (bg_snapshot) {
         return;
+    }
 
     bg_snapshot = lv_snapshot_take(bg_pic, LV_IMG_CF_TRUE_COLOR);
-    if (!bg_snapshot)
-    {
+    if (!bg_snapshot) {
         printf("snapshot take failed\n");
         return;
     }
@@ -220,8 +187,7 @@ lv_img_dsc_t *get_bg_snapshot(void)
 static void take_snapshot(lv_timer_t *timer)
 {
     bg_pic_snapshot_blur();
-    if (timer_snapshot)
-    {
+    if (timer_snapshot) {
         lv_timer_del(timer_snapshot);
         timer_snapshot = NULL;
     }
@@ -237,10 +203,10 @@ void home_ui_init(void)
 
     protocol_init();
     protocol_handler_init();
-    register_proto_handlers();
 
-    if (main)
+    if (main) {
         return;
+    }
 
     main = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(main);
@@ -248,14 +214,11 @@ void home_ui_init(void)
     lv_obj_set_size(main, lv_pct(100), lv_pct(100));
     lv_obj_refr_size(main);
 
-    if (scr_dir == LV_DIR_HOR)
-    {
+    if (scr_dir == LV_DIR_HOR) {
         item_w = RK_PCT_H(30);
         cols = home_desc.btn_cnt;
         rows = 1;
-    }
-    else
-    {
+    } else {
         item_w = RK_PCT_W(25);
         cols = 2;
         rows = ceil((float)home_desc.btn_cnt / cols);
@@ -273,10 +236,11 @@ void home_ui_init(void)
     home_desc.row_dsc = row_dsc;
 
     ui_box_main = ui_btnmatrix_create(main, &home_desc);
-    if (scr_dir == LV_DIR_HOR)
+    if (scr_dir == LV_DIR_HOR) {
         lv_obj_align(ui_box_main, LV_ALIGN_BOTTOM_MID, 0, -20);
-    else
+    } else {
         lv_obj_center(ui_box_main);
+    }
 
 #if WIFIBT_EN
     ui_wifi = lv_img_create(main);
@@ -310,14 +274,14 @@ void home_ui_init(void)
     lv_obj_get_content_coords(ui_box_main, &area2);
     lv_obj_get_content_coords(main, &area3);
 
-    if ((area3.x2 - area3.x1) < (area2.x2 - area2.x1))
-    {
+    if ((area3.x2 - area3.x1) < (area2.x2 - area2.x1)) {
         lv_obj_set_width(ui_box_main, lv_pct(100));
         lv_obj_set_align(ui_box_main, LV_ALIGN_LEFT_MID);
     }
 
-    if (area2.y1 < area1.y2)
+    if (area2.y1 < area1.y2) {
         lv_obj_set_y(ui_box_main, area1.y2 - area2.y1 + 5);
+    }
 }
 
 void rk_demo_init(void)
@@ -352,13 +316,14 @@ void rk_demo_bg_set_img(const char *img)
 
 void rk_demo_bg_hide(void)
 {
-    if (bg_pic)
+    if (bg_pic) {
         lv_obj_add_flag(bg_pic, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 void rk_demo_bg_show(void)
 {
-    if (bg_pic)
+    if (bg_pic) {
         lv_obj_clear_flag(bg_pic, LV_OBJ_FLAG_HIDDEN);
+    }
 }
-

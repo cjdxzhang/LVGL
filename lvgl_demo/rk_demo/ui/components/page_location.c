@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include "top_status.h"
+#include "gateway_client.h"
 
 LV_FONT_DECLARE(clean_cn);
 LV_FONT_DECLARE(back_btn);
@@ -47,19 +48,26 @@ static const char * s_location_names[LOCATION_COUNT] = {
     "阳台"
 };
 
+static const gateway_location_id_t s_gateway_location_ids[LOCATION_COUNT] = {
+    GATEWAY_LOCATION_LIVING_ROOM,
+    GATEWAY_LOCATION_BEDROOM,
+    GATEWAY_LOCATION_STUDY,
+    GATEWAY_LOCATION_BALCONY
+};
+
 static const char * get_location_icon(location_id_t id)
 {
-    switch(id) {
-    case LOCATION_LIVING_ROOM:
-        return "\xEE\x99\x8C";  /* U+E601 */
-    case LOCATION_BEDROOM:
-        return "\xEE\x98\xA1";  /* U+E606 */
-    case LOCATION_STUDY:
-        return "\xEE\x98\x86";  /* U+E621 */
-    case LOCATION_BALCONY:
-        return "\xEE\x98\x81";  /* U+E64C */
-    default:
-        return "\xEE\x99\x8C";
+    switch (id) {
+        case LOCATION_LIVING_ROOM:
+            return "\xEE\x99\x8C";  /* U+E601 */
+        case LOCATION_BEDROOM:
+            return "\xEE\x98\xA1";  /* U+E606 */
+        case LOCATION_STUDY:
+            return "\xEE\x98\x86";  /* U+E621 */
+        case LOCATION_BALCONY:
+            return "\xEE\x98\x81";  /* U+E64C */
+        default:
+            return "\xEE\x99\x8C";
     }
 }
 
@@ -91,21 +99,24 @@ static void update_location_card(location_id_t id)
     static char buf[32];
     lv_snprintf(buf, sizeof(buf), "移动至%s", s_location_names[id]);
 
-    if(s_label_target) {
+    if (s_label_target) {
         lv_label_set_text(s_label_target, buf);
     }
 
-    if(s_card_icon) {
+    if (s_card_icon) {
         lv_label_set_text(s_card_icon, get_location_icon(id));
     }
 }
 
 static void update_location_btn_state(location_id_t selected)
 {
-    for(int i = 0; i < LOCATION_COUNT; i++) {
-        if(s_btn_location[i] == NULL) continue;
+    for(int i = 0; i < LOCATION_COUNT; i++)
+    {
+        if (s_btn_location[i] == NULL) {
+            continue;
+        }
 
-        if(i == selected) {
+        if (i == selected) {
             lv_obj_set_style_bg_opa(s_btn_location[i], LV_OPA_50, 0);
             lv_obj_set_style_border_width(s_btn_location[i], 2, 0);
             lv_obj_set_style_border_color(s_btn_location[i], lv_color_hex(0xFFFFFF), 0);
@@ -121,7 +132,9 @@ static void update_location_btn_state(location_id_t selected)
 
 static void location_btn_event_cb(lv_event_t * e)
 {
-    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
+        return;
+    }
 
     location_id_t id = (location_id_t)(uintptr_t)lv_event_get_user_data(e);
     s_selected_location = id;
@@ -132,18 +145,30 @@ static void location_btn_event_cb(lv_event_t * e)
 
 static void start_move_btn_event_cb(lv_event_t * e)
 {
-    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    int ret;
+
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
+        return;
+    }
 
     LV_LOG_USER("start move to %s", s_location_names[s_selected_location]);
+    ret = gateway_client_go_location(s_gateway_location_ids[s_selected_location]);
+    if (ret != GATEWAY_CLIENT_OK) {
+        LV_LOG_WARN("[LOCATION] send go location failed: id=%d ret=%d",
+                    (int)s_selected_location, ret);
+        return;
+    }
 
     page_location_switch(s_page_location_main, s_page_location_moving);
 }
 
 static void back_btn_event_cb(lv_event_t * e)
 {
-    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
+        return;
+    }
 
-    if(s_show_page_cb) {
+    if (s_show_page_cb) {
         s_show_page_cb(s_page_main);
     }
 }
@@ -194,7 +219,7 @@ static lv_obj_t * create_base_page_with_status_bar(lv_obj_t * parent)
 page_location_set_t page_location_create(lv_obj_t * parent,
                                          void (*show_page_cb)(lv_obj_t * page),
                                          lv_obj_t * page_main)
-{
+                                         {
     page_location_set_t set = {0};
 
     s_show_page_cb = show_page_cb;
@@ -262,10 +287,12 @@ page_location_set_t page_location_create(lv_obj_t * parent,
 
 static void emergency_stop_btn_event_cb(lv_event_t * e)
 {
-    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
+        return;
+    }
 
     /* 这里后续可接暂停确认页
-       现在先回到定位选择页，方便你先验证流程 */
+         现在先回到定位选择页，方便你先验证流程 */
     page_location_switch(s_page_location_moving, s_page_location_pause_confirm);
 }
 
@@ -343,13 +370,39 @@ static void apply_back_icon_style(lv_obj_t * icon)
 
 static void page_location_switch(lv_obj_t * from, lv_obj_t * to)
 {
-    if(from) lv_obj_add_flag(from, LV_OBJ_FLAG_HIDDEN);
-    if(to)   lv_obj_clear_flag(to, LV_OBJ_FLAG_HIDDEN);
+    if (from) {
+        lv_obj_add_flag(from, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (to) {
+        lv_obj_clear_flag(to, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void page_location_hide_all(void)
+{
+    if (s_page_location_main) {
+        lv_obj_add_flag(s_page_location_main, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_page_location_moving) {
+        lv_obj_add_flag(s_page_location_moving, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_page_location_pause_confirm) {
+        lv_obj_add_flag(s_page_location_pause_confirm, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 static void moving_pause_yes_event_cb(lv_event_t * e)
 {
-    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    int ret;
+
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
+        return;
+    }
+
+    ret = gateway_client_clear_navigation();
+    if (ret != GATEWAY_CLIENT_OK) {
+        LV_LOG_WARN("[LOCATION] clear navigation failed: ret=%d", ret);
+    }
 
     /* 确认停止：先回定位选择页 */
     page_location_switch(s_page_location_pause_confirm, s_page_location_main);
@@ -357,7 +410,9 @@ static void moving_pause_yes_event_cb(lv_event_t * e)
 
 static void moving_pause_no_event_cb(lv_event_t * e)
 {
-    if(lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
+        return;
+    }
 
     /* 取消停止：回到正在移动页 */
     page_location_switch(s_page_location_pause_confirm, s_page_location_moving);
@@ -443,4 +498,3 @@ static void apply_pause_confirm_btn_style(lv_obj_t * obj)
 
     lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
 }
-

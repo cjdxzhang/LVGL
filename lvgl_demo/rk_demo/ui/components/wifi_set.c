@@ -85,7 +85,7 @@ static void apply_input_row_style(lv_obj_t * obj, lv_coord_t radius)
 
 static void set_keyboard_target(lv_obj_t * ta)
 {
-    if(s_keyboard == NULL || ta == NULL) {
+    if (s_keyboard == NULL || ta == NULL) {
         return;
     }
 
@@ -95,7 +95,7 @@ static void set_keyboard_target(lv_obj_t * ta)
 
 static void hide_keyboard(void)
 {
-    if(s_keyboard == NULL) {
+    if (s_keyboard == NULL) {
         return;
     }
 
@@ -105,11 +105,11 @@ static void hide_keyboard(void)
 
 static void update_connect_view(void)
 {
-    if(s_hint_label == NULL || s_connect_btn_label == NULL) {
+    if (s_hint_label == NULL || s_connect_btn_label == NULL) {
         return;
     }
 
-    if(s_connected) {
+    if (s_connected) {
         lv_label_set_text(s_hint_label, "已连接");
         lv_label_set_text(s_connect_btn_label, "断开连接");
     }
@@ -121,24 +121,24 @@ static void update_connect_view(void)
 
 static void home_btn_event_cb(lv_event_t * e)
 {
-    if(lv_event_get_code(e) != LV_EVENT_CLICKED) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
         return;
     }
 
     hide_keyboard();
-    if(s_home_cb) {
+    if (s_home_cb) {
         s_home_cb(e);
     }
 }
 
 static void back_btn_event_cb(lv_event_t * e)
 {
-    if(lv_event_get_code(e) != LV_EVENT_CLICKED) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
         return;
     }
 
     hide_keyboard();
-    if(s_back_cb) {
+    if (s_back_cb) {
         s_back_cb(e);
     }
 }
@@ -148,7 +148,7 @@ static void input_event_cb(lv_event_t * e)
     lv_event_code_t code = lv_event_get_code(e);
     lv_obj_t * ta = lv_event_get_target(e);
 
-    if(code == LV_EVENT_CLICKED || code == LV_EVENT_FOCUSED) {
+    if (code == LV_EVENT_CLICKED || code == LV_EVENT_FOCUSED) {
         set_keyboard_target(ta);
     }
 }
@@ -156,14 +156,14 @@ static void input_event_cb(lv_event_t * e)
 static void keyboard_event_cb(lv_event_t * e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    if(code == LV_EVENT_READY || code == LV_EVENT_CANCEL) {
+    if (code == LV_EVENT_READY || code == LV_EVENT_CANCEL) {
         hide_keyboard();
     }
 }
 
 static void connect_btn_event_cb(lv_event_t * e)
 {
-    if(lv_event_get_code(e) != LV_EVENT_CLICKED) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
         return;
     }
 
@@ -174,7 +174,7 @@ static void connect_btn_event_cb(lv_event_t * e)
 
 lv_obj_t * wifi_set_create(lv_obj_t * parent)
 {
-    if(s_root) {
+    if (s_root) {
         lv_obj_clear_flag(s_root, LV_OBJ_FLAG_HIDDEN);
         return s_root;
     }
@@ -347,7 +347,7 @@ lv_obj_t * wifi_set_get_root(void)
 
 void wifi_set_destroy(void)
 {
-    if(s_root) {
+    if (s_root) {
         lv_obj_del(s_root);
         s_root = NULL;
     }

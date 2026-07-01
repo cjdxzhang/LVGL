@@ -35,10 +35,11 @@ void app_aircond_init(lv_obj_t *parent, void *userdata)
 
     obj = lv_label_create(area_aircond);
     lv_obj_align(obj, LV_ALIGN_TOP_LEFT, 0, 0);
-    if (userdata)
+    if (userdata) {
         lv_label_set_text(obj, userdata);
-    else
+    } else {
         lv_label_set_text_fmt(obj, "空调 %d", idx++);
+    }
     lv_obj_add_style(obj, &style_txt_m, LV_PART_MAIN);
     lv_obj_set_style_text_color(obj, lv_color_white(), LV_PART_MAIN);
 
@@ -92,8 +93,8 @@ void app_aircond_init(lv_obj_t *parent, void *userdata)
 
     temp = lv_roller_create(area_set);
     lv_roller_set_options(temp, "16\n17\n18\n19\n20\n21\n22\n23\n"
-                          "24\n25\n26\n27\n28\n29\n30\n31\n32",
-                          LV_ROLLER_MODE_NORMAL);
+                            "24\n25\n26\n27\n28\n29\n30\n31\n32",
+                            LV_ROLLER_MODE_NORMAL);
     lv_roller_set_visible_row_count(temp, 3);
     lv_roller_set_selected(temp, 8, LV_ANIM_OFF);
     lv_obj_align(temp, LV_ALIGN_CENTER, 0, 0);

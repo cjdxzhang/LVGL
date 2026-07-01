@@ -14,6 +14,7 @@ if (LVGL_V9)
 		${PROJECT_SOURCE_DIR}/uart_comm
 		${PROJECT_SOURCE_DIR}/protocol
 		${PROJECT_SOURCE_DIR}/net_comm
+		${PROJECT_SOURCE_DIR}/gateway_client
 		${PROJECT_SOURCE_DIR}/ui
 		${PROJECT_SOURCE_DIR}/ui/components
 		${PROJECT_SOURCE_DIR}/ui/screens
@@ -41,6 +42,7 @@ if (LVGL_V9)
 	aux_source_directory(./uart_comm SRCS)
 	aux_source_directory(./protocol SRCS)
 	aux_source_directory(./net_comm SRCS)
+	aux_source_directory(./gateway_client SRCS)
 	aux_source_directory(./ui/components SRCS)
 	aux_source_directory(./ui/screens SRCS)
 	aux_source_directory(./assets/fonts SRCS)
@@ -65,6 +67,7 @@ else()
 		${PROJECT_SOURCE_DIR}/uart_comm
 		${PROJECT_SOURCE_DIR}/protocol
 		${PROJECT_SOURCE_DIR}/net_comm
+		${PROJECT_SOURCE_DIR}/gateway_client
 		${CMAKE_SYSROOT}/usr/include/rga/
 		${CMAKE_SYSROOT}/usr/include/rkadk/
 		)
@@ -83,6 +86,7 @@ else()
 	aux_source_directory(./uart_comm SRCS)
 	aux_source_directory(./protocol SRCS)
 	aux_source_directory(./net_comm SRCS)
+	aux_source_directory(./gateway_client SRCS)
 endif()
 
 link_directories(${PROJECT_SOURCE_DIR}/audio_algorithm/lib)

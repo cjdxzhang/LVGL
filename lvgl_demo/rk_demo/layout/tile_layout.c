@@ -72,11 +72,13 @@ static int is_free_area(struct tile_map *map, lv_area_t *area)
     {
         for (int j = 0; j < w; j++)
         {
-            if (((x + j) == tl->cols) || (y + i) == tl->rows)
+            if (((x + j) == tl->cols) || (y + i) == tl->rows) {
                 return 0;
+            }
 
-            if (READ_MAP(map, x + j, y + i))
+            if (READ_MAP(map, x + j, y + i)) {
                 return 0;
+            }
         }
     }
 
@@ -101,10 +103,12 @@ void *tile_layout_create(lv_obj_t *parent, int w, int h, int base_size)
 
     tl = calloc(1, sizeof(struct tile_layout));
 
-    if (!w)
+    if (!w) {
         w = lv_obj_get_content_width(parent);
-    if (!h)
+    }
+    if (!h) {
         h = lv_obj_get_content_height(parent);
+    }
 
     tl->cols = (float)w / base_size;
     tl->rows = (float)h / base_size;
@@ -149,11 +153,11 @@ lv_obj_t *tile_layout_new_item(void *layout, int cols, int rows, int pad)
             area.y1 = i;
             area.x2 = j + cols - 1;
             area.y2 = i + rows - 1;
-            if (is_free_area(&tl->map, &area))
-            {
+            if (is_free_area(&tl->map, &area)) {
                 mark_area(&tl->map, &area);
-                if (pad)
+                if (pad) {
                     return (void *)1;
+                }
 
                 obj = lv_obj_create(tl->layout);
                 lv_obj_remove_style_all(obj);

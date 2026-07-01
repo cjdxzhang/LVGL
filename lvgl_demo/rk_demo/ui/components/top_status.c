@@ -1,4 +1,5 @@
 #include "top_status.h"
+#include "ui_time.h"
 
 /****WIFI状态****/
 LV_FONT_DECLARE(wifi_icon_font);
@@ -23,6 +24,9 @@ static void status_bar_set_wifi_internal(uint8_t level);
 static void status_bar_set_connect_internal(uint8_t state);
 static void status_bar_set_voice_internal(uint8_t state);
 static void status_bar_set_battery_internal(uint8_t level);
+static void status_bar_update_time(lv_obj_t *label);
+static void status_bar_time_timer_cb(lv_timer_t *timer);
+static void status_bar_time_delete_cb(lv_event_t *e);
 
 void status_bar_create(lv_obj_t * parent)
 {
@@ -50,10 +54,12 @@ void status_bar_create(lv_obj_t * parent)
 
     /* ===== 时间显示 ===== */
     g_time_label = lv_label_create(parent);
-    lv_label_set_text(g_time_label, "2026-03-10 16:00");
     lv_obj_set_style_text_font(g_time_label, &font_cn_28, 0);
     lv_obj_set_style_text_color(g_time_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_pos(g_time_label, 510, 13);
+    status_bar_update_time(g_time_label);
+    lv_timer_t *time_timer = lv_timer_create(status_bar_time_timer_cb, 1000, g_time_label);
+    lv_obj_add_event_cb(g_time_label, status_bar_time_delete_cb, LV_EVENT_DELETE, time_timer);
 
     /* ===== 电池状态 ===== */
     g_battery_label = lv_label_create(parent);
@@ -90,15 +96,53 @@ void status_bar_set_battery(uint8_t level)
 
 void status_bar_set_time(const char * text)
 {
-    if(g_time_label == NULL) return;
+    if (g_time_label == NULL) {
+        return;
+    }
     lv_label_set_text(g_time_label, text);
+}
+
+static void status_bar_update_time(lv_obj_t *label)
+{
+    char text[UI_TIME_TEXT_LEN];
+
+    if (label == NULL) {
+        return;
+    }
+    if (!ui_time_format_now(text, sizeof(text))) {
+        return;
+    }
+    lv_label_set_text(label, text);
+}
+
+static void status_bar_time_timer_cb(lv_timer_t *timer)
+{
+    if (timer == NULL) {
+        return;
+    }
+    status_bar_update_time((lv_obj_t *)timer->user_data);
+}
+
+static void status_bar_time_delete_cb(lv_event_t *e)
+{
+    lv_obj_t *target = lv_event_get_target(e);
+    lv_timer_t *timer = (lv_timer_t *)lv_event_get_user_data(e);
+
+    if (timer) {
+        lv_timer_del(timer);
+    }
+    if (target == g_time_label) {
+        g_time_label = NULL;
+    }
 }
 
 static void status_bar_set_wifi_internal(uint8_t level)
 {
-    if(g_wifi_label == NULL) return;
+    if (g_wifi_label == NULL) {
+        return;
+    }
 
-    switch(level) {
+    switch (level) {
         case 0:
             lv_label_set_text(g_wifi_label, "\xEE\x98\xBD");
             break;
@@ -114,9 +158,11 @@ static void status_bar_set_wifi_internal(uint8_t level)
 
 static void status_bar_set_connect_internal(uint8_t state)
 {
-    if(g_connect_label == NULL) return;
+    if (g_connect_label == NULL) {
+        return;
+    }
 
-    switch(state) {
+    switch (state) {
         case 0:
             lv_label_set_text(g_connect_label, "\xEE\x99\x99");
             break;
@@ -129,9 +175,11 @@ static void status_bar_set_connect_internal(uint8_t state)
 
 static void status_bar_set_voice_internal(uint8_t state)
 {
-    if(g_voice_label == NULL) return;
+    if (g_voice_label == NULL) {
+        return;
+    }
 
-    switch(state) {
+    switch (state) {
         case 0:
             lv_label_set_text(g_voice_label, "\xEE\x9B\xA4");
             break;
@@ -144,9 +192,11 @@ static void status_bar_set_voice_internal(uint8_t state)
 
 static void status_bar_set_battery_internal(uint8_t level)
 {
-    if(g_battery_label == NULL) return;
+    if (g_battery_label == NULL) {
+        return;
+    }
 
-    switch(level) {
+    switch (level) {
         case 0:
             lv_label_set_text(g_battery_label, "\xEE\x98\x99");
             break;
@@ -168,4 +218,3 @@ static void status_bar_set_battery_internal(uint8_t level)
             break;
     }
 }
-

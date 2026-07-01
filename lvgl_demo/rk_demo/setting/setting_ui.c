@@ -273,15 +273,11 @@ static void switch_toggled(lv_event_t *e)
     lv_color_t color = lv_obj_get_style_bg_color(ui_bt, LV_PART_MAIN);
     lv_color_t hl = HL_BLUE;
 
-    if (e->code == LV_EVENT_CLICKED)
-    {
-        if (color.full == hl.full)
-        {
+    if (e->code == LV_EVENT_CLICKED) {
+        if (color.full == hl.full) {
             lv_obj_set_style_bg_color(ui_bt, MAIN_COLOR, LV_PART_MAIN);
             cmdarg.cmd = BT_DISABLE;
-        }
-        else
-        {
+        } else {
             lv_obj_set_style_bg_color(ui_bt, HL_BLUE, LV_PART_MAIN);
             cmdarg.cmd = BT_ENABLE;
         }
@@ -294,23 +290,23 @@ static void menu_switch_cb(lv_event_t *e)
 {
     intptr_t idx = (intptr_t)lv_event_get_user_data(e);
 
-    if (idx < SUBMENU_MIN || idx >= SUBMENU_MAX)
+    if (idx < SUBMENU_MIN || idx >= SUBMENU_MAX) {
         return;
+    }
 
     if ((cur_menu >= SUBMENU_MIN)
             && (cur_menu < SUBMENU_MAX)
-            && submenu_desc[cur_menu].menu)
-    {
+            && submenu_desc[cur_menu].menu) {
         lv_obj_add_flag(submenu_desc[cur_menu].menu,
                         LV_OBJ_FLAG_HIDDEN);
     }
 
-    if (submenu_desc[idx].init)
+    if (submenu_desc[idx].init) {
         submenu_desc[idx].init();
+    }
 
     cur_menu = idx;
-    if (submenu_desc[cur_menu].menu)
-    {
+    if (submenu_desc[cur_menu].menu) {
         lv_obj_clear_flag(submenu_mask, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(submenu_desc[cur_menu].menu,
                           LV_OBJ_FLAG_HIDDEN);
@@ -320,12 +316,9 @@ static void menu_switch_cb(lv_event_t *e)
 #if WIFIBT_EN
 static void wifi_switch_cb(lv_event_t *e)
 {
-    if (wifi_init_done())
-    {
+    if (wifi_init_done()) {
         menu_switch_cb(e);
-    }
-    else
-    {
+    } else {
         lv_obj_t *toast = lv_toast_create(lv_layer_sys());
         lv_toast_set_text(toast, "WiFi初始化未完成请稍后重试");
         lv_obj_add_style(toast, &style_txt_m, LV_PART_MAIN);
@@ -337,23 +330,23 @@ static void wifi_switch_cb(lv_event_t *e)
 
 static void btn_return_cb(lv_event_t *e)
 {
-    switch (e->code)
-    {
-    case LV_EVENT_CLICKED:
-        home_ui_init();
-        lv_timer_del(timer);
-        for (int i = SUBMENU_MIN; i < SUBMENU_MAX; i++)
-        {
-            if (submenu_desc[i].deinit)
-                submenu_desc[i].deinit();
-        }
-        lv_obj_del(main);
-        main = NULL;
-        lv_obj_del(submenu_mask);
-        submenu_mask = NULL;
-        break;
-    default:
-        break;
+    switch (e->code) {
+        case LV_EVENT_CLICKED:
+            home_ui_init();
+            lv_timer_del(timer);
+            for (int i = SUBMENU_MIN; i < SUBMENU_MAX; i++)
+            {
+                if (submenu_desc[i].deinit) {
+                    submenu_desc[i].deinit();
+                }
+            }
+            lv_obj_del(main);
+            main = NULL;
+            lv_obj_del(submenu_mask);
+            submenu_mask = NULL;
+            break;
+        default:
+            break;
     }
 }
 
@@ -365,27 +358,28 @@ static void submenu_mask_cb(lv_event_t *e)
 static void state_update(lv_timer_t *timer)
 {
 #if WIFIBT_EN
-    if (wifi_enabled())
+    if (wifi_enabled()) {
         lv_obj_set_style_bg_color(ui_wifi, HL_BLUE, LV_PART_MAIN);
-    else
+    } else {
         lv_obj_set_style_bg_color(ui_wifi, MAIN_COLOR, LV_PART_MAIN);
+    }
 #endif
 
 #if BT_EN
     cmdarg.cmd = BT_INFO;
     cmdarg.val = &new_info;
     bt_query_wait(&cmdarg, sizeof(cmdarg));
-    if (new_info.bt_state >= BT_STATE_ON)
+    if (new_info.bt_state >= BT_STATE_ON) {
         lv_obj_set_style_bg_color(ui_bt, HL_BLUE, LV_PART_MAIN);
-    else
+    } else {
         lv_obj_set_style_bg_color(ui_bt, MAIN_COLOR, LV_PART_MAIN);
+    }
 #endif
 }
 
 void setting_ui_init(void)
 {
-    if (main)
-    {
+    if (main) {
         lv_obj_clear_flag(main, LV_OBJ_FLAG_HIDDEN);
         return;
     }
@@ -402,20 +396,22 @@ void setting_ui_init(void)
     lv_obj_align(ui_box_main, LV_ALIGN_TOP_MID, 0, lv_pct(10));
 
 #if WIFIBT_EN
-    if (wifi_enabled())
+    if (wifi_enabled()) {
         lv_obj_set_style_bg_color(ui_wifi, HL_BLUE, LV_PART_MAIN);
-    else
+    } else {
         lv_obj_set_style_bg_color(ui_wifi, MAIN_COLOR, LV_PART_MAIN);
+    }
 #endif
 
 #if BT_EN
     cmdarg.cmd = BT_INFO;
     cmdarg.val = &new_info;
     bt_query_wait(&cmdarg, sizeof(cmdarg));
-    if (new_info.bt_state >= BT_STATE_ON)
+    if (new_info.bt_state >= BT_STATE_ON) {
         lv_obj_set_style_bg_color(ui_bt, HL_BLUE, LV_PART_MAIN);
-    else
+    } else {
         lv_obj_set_style_bg_color(ui_bt, MAIN_COLOR, LV_PART_MAIN);
+    }
 #endif
 
     submenu_mask = lv_obj_create(lv_scr_act());

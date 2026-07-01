@@ -781,12 +781,15 @@ inline static void rkaudio_rx_param_destory(void *param_)
 inline static void rkaudio_param_deinit(void *param_)
 {
     RKAUDIOParam *param = (RKAUDIOParam *)param_;
-    if (param->aec_param != NULL)
+    if (param->aec_param != NULL) {
         rkaudio_aec_param_destory(param->aec_param);
-    if (param->bf_param != NULL)
+    }
+    if (param->bf_param != NULL) {
         rkaudio_preprocess_param_destory(param->bf_param);
-    if (param->rx_param != NULL)
+    }
+    if (param->rx_param != NULL) {
         rkaudio_rx_param_destory(param->rx_param);
+    }
 }
 
 void *rkaudio_preprocess_init(int rate, int bits, int src_chan, int ref_chan, RKAUDIOParam *param);

@@ -44,8 +44,7 @@ static void calendar_cb(lv_event_t *e)
 {
     lv_calendar_date_t date;
 
-    if (lv_calendar_get_pressed_date(calendar, &date))
-    {
+    if (lv_calendar_get_pressed_date(calendar, &date)) {
         lv_label_set_text_fmt(label_date, "%04d-%02d-%02d",
                               date.year, date.month, date.day);
         lv_obj_del(mask);

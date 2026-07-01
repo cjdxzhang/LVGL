@@ -16,15 +16,13 @@ void common_draw(lv_obj_t *parent, struct btn_desc *desc)
                           LV_FLEX_ALIGN_CENTER);
     lv_obj_center(obj);
 
-    if (desc->img)
-    {
+    if (desc->img) {
         img = lv_img_create(obj);
         lv_obj_add_flag(img, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_EVENT_BUBBLE);
         lv_img_set_src(img, desc->img);
     }
 
-    if (desc->text)
-    {
+    if (desc->text) {
         label = lv_label_create(obj);
         lv_obj_add_flag(label, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_EVENT_BUBBLE);
         lv_obj_add_style(label, &style_txt_m, LV_PART_MAIN);
@@ -40,8 +38,9 @@ static int area_empty(lv_coord_t *map, lv_coord_t w, lv_coord_t h,
     {
         for (int j = 0; j < w; j++)
         {
-            if (map[i * stride + j])
+            if (map[i * stride + j]) {
                 return 0;
+            }
         }
     }
 
@@ -75,8 +74,7 @@ lv_obj_t *ui_btnmatrix_create(lv_obj_t *parent, struct btn_matrix_desc *desc)
     {
         cols++;
         tmp++;
-        if (cols > 100)
-        {
+        if (cols > 100) {
             printf("invalid col_dsc\n");
             return NULL;
         }
@@ -87,8 +85,7 @@ lv_obj_t *ui_btnmatrix_create(lv_obj_t *parent, struct btn_matrix_desc *desc)
     {
         rows++;
         tmp++;
-        if (rows > 100)
-        {
+        if (rows > 100) {
             printf("invalid row_dsc\n");
             return NULL;
         }
@@ -109,15 +106,13 @@ lv_obj_t *ui_btnmatrix_create(lv_obj_t *parent, struct btn_matrix_desc *desc)
     {
         lv_obj_t *obj;
 
-        if (desc->desc[i].w > cols || desc->desc[i].h > rows)
-        {
+        if (desc->desc[i].w > cols || desc->desc[i].h > rows) {
             printf("item too large [%dx%d] > [%dx%d]\n",
                    desc->desc[i].w, desc->desc[i].h, cols, rows);
             continue;
         }
 
-        if (desc->desc[i].w || desc->desc[i].h)
-        {
+        if (desc->desc[i].w || desc->desc[i].h) {
             found = 0;
             w = desc->desc[i].w;
             h = desc->desc[i].h;
@@ -125,38 +120,32 @@ lv_obj_t *ui_btnmatrix_create(lv_obj_t *parent, struct btn_matrix_desc *desc)
             {
                 for (int c = 0; c <= (cols - w); c++)
                 {
-                    if (area_empty(&map[r * cols + c], w, h, cols))
-                    {
+                    if (area_empty(&map[r * cols + c], w, h, cols)) {
                         x = c;
                         y = r;
                         found = 1;
                         break;
                     }
                 }
-                if (found)
+                if (found) {
                     break;
+                }
             }
-            if (!found)
-            {
+            if (!found) {
                 printf("No empty area\n");
                 continue;
             }
             area_fill(&map[y * cols + x], w, h, cols);
-        }
-        else
-        {
+        } else {
             x = desc->desc[i].area.x1;
             y = desc->desc[i].area.y1;
             w = desc->desc[i].area.x2 - desc->desc[i].area.x1;
             h = desc->desc[i].area.y2 - desc->desc[i].area.y1;
         }
 
-        if (desc->desc[i].create)
-        {
+        if (desc->desc[i].create) {
             obj = desc->desc[i].create(main);
-        }
-        else
-        {
+        } else {
             obj = lv_obj_create(main);
             lv_obj_remove_style_all(obj);
             lv_obj_set_style_bg_color(obj, MAIN_COLOR, LV_PART_MAIN);
@@ -175,14 +164,16 @@ lv_obj_t *ui_btnmatrix_create(lv_obj_t *parent, struct btn_matrix_desc *desc)
         lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_refr_size(obj);
         lv_obj_refr_pos(obj);
-        if (desc->desc[i].cb)
+        if (desc->desc[i].cb) {
             lv_obj_add_event_cb(obj, desc->desc[i].cb, LV_EVENT_CLICKED,
                                 desc->desc[i].user_data);
+        }
 
         *desc->desc[i].obj = obj;
 
-        if (desc->desc[i].draw)
+        if (desc->desc[i].draw) {
             desc->desc[i].draw(obj, &desc->desc[i]);
+        }
     }
 
     free(map);

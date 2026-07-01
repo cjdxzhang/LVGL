@@ -7,28 +7,81 @@
 #define FRAME_LEN       30
 #define FRAME_HEAD1     0x55
 #define FRAME_HEAD2     0xAA
-#define CMD_MAX         0x1E
+#define CMD_MAX         0x100
+
+#define PROTO_OFFSET_HEAD1              0
+#define PROTO_OFFSET_HEAD2              1
+#define PROTO_OFFSET_LINK_MODE          2
+#define PROTO_OFFSET_CMD_TYPE           3
+#define PROTO_OFFSET_LINK_STATUS        4
+#define PROTO_OFFSET_BUCKET_WATER       5
+#define PROTO_OFFSET_BUCKET_TEMP        6
+#define PROTO_OFFSET_BUCKET_MASSAGE     7
+#define PROTO_OFFSET_BUCKET_UV          8
+#define PROTO_OFFSET_BUCKET_TIMER       9
+#define PROTO_OFFSET_BUCKET_VOLT_H      10
+#define PROTO_OFFSET_BUCKET_VOLT_L      11
+#define PROTO_OFFSET_BUCKET_MAIN_STATUS 12
+#define PROTO_OFFSET_BUCKET_SUB_STATUS  13
+#define PROTO_OFFSET_BUCKET_ERR1        14
+#define PROTO_OFFSET_BUCKET_ERR2        15
+#define PROTO_OFFSET_BASE_WATER_SUPPLY  16
+#define PROTO_OFFSET_BASE_SPRAY_HOT_T   17
+#define PROTO_OFFSET_BASE_SPRAY_COLD_T  18
+#define PROTO_OFFSET_BASE_DRY_TIME      19
+#define PROTO_OFFSET_BASE_HERB1         20
+#define PROTO_OFFSET_BASE_HERB2         21
+#define PROTO_OFFSET_BASE_CLEANER       22
+#define PROTO_OFFSET_BASE_MAIN_STATUS   23
+#define PROTO_OFFSET_BASE_SUB_STATUS    24
+#define PROTO_OFFSET_BASE_ERR1          25
+#define PROTO_OFFSET_BASE_ERR2          26
+#define PROTO_OFFSET_BASE_AMBIENT_LED   27
+#define PROTO_OFFSET_EXT_BYTE           28
+#define PROTO_OFFSET_CHECKSUM           29
+
+#define PROTO_CHECKSUM_START            PROTO_OFFSET_LINK_MODE
+#define PROTO_CHECKSUM_LEN              (FRAME_LEN - 3)
+#define PROTO_RX_TIMEOUT_MS             3000
+#define PROTO_PERIODIC_SEND_MS          1000
 
 typedef enum {
     LINK_MODE_BUCKET_ONLY = 0x01,
-    LINK_MODE_TRANSPARENT = 0x02,
+    LINK_MODE_MCU_COMMAND = 0x02,
     LINK_MODE_DIRECT      = 0x03,
 } link_mode_t;
 
 typedef enum {
-    CMD_IDLE        = 0x00,
+    CMD_IDLE              = 0x00,
 
-    CMD_BUCKET_STANDBY  = 0xA0,
-    CMD_BUCKET_IDLE     = 0xA1,
-    CMD_BUCKET_FOOTBATH = 0xA4,
-    CMD_BUCKET_SELFCHECK= 0xA7,
-    CMD_BUCKET_DRAIN    = 0xA8,
+    CMD_BUCKET_POWER_OFF  = 0xA0,
+    CMD_BUCKET_STANDBY    = 0xA1,
+    CMD_BUCKET_HEAT_ON    = 0xA2,
+    CMD_BUCKET_HEAT_OFF   = 0xA3,
+    CMD_BUCKET_MASSAGE    = 0xA4,
+    CMD_BUCKET_UV         = 0xA5,
+    CMD_BUCKET_TIMER      = 0xA6,
+    CMD_BUCKET_STOP       = 0xA7,
+    CMD_BUCKET_SELFCHECK  = 0xA8,
+    CMD_BUCKET_LOW_BATT   = 0xA9,
+    CMD_BUCKET_AUTO_WAREHOUSE = 0xAA,
 
-    CMD_BASE_SELFCLEAN  = 0xB3,
-    CMD_BASE_DRAIN      = 0xB5,
+    /* 兼容旧版 home_ui.c 的命名。 */
+    CMD_BUCKET_FOOTBATH   = CMD_BUCKET_MASSAGE,
 
-    CMD_SYSTEM_PAIR     = 0xC0,
-    CMD_SYSTEM_OTA      = 0xC1,
+    CMD_BASE_POWER_OFF    = 0xB0,
+    CMD_BASE_STANDBY      = 0xB1,
+    CMD_BASE_AUTO_FILL    = 0xB2,
+    CMD_BASE_SELFCLEAN    = 0xB3,
+    CMD_BASE_FORCE_DRAIN  = 0xB4,
+    CMD_BASE_HOT_SPRAY    = 0xB5,
+    CMD_BASE_COLD_SPRAY   = 0xB6,
+    CMD_BASE_DRY          = 0xB7,
+    CMD_BASE_SELFCHECK    = 0xB8,
+
+    CMD_SYSTEM_RESET      = 0xC0,
+    CMD_SYSTEM_PAIR       = 0xC1,
+    CMD_SYSTEM_OTA        = 0xC2,
 } cmd_type_t;
 
 typedef enum {
@@ -40,30 +93,33 @@ typedef enum {
 } bucket_status_t;
 
 typedef enum {
-    BASE_STATUS_IDLE              = 0x00,
-    BASE_STATUS_AUTO_FILLING      = 0x01,
-    BASE_STATUS_FILL_DONE_KEEP    = 0x02,
-    BASE_STATUS_FILL_DONE_WAIT    = 0x03,
-    BASE_STATUS_CLEAN_SPRAY       = 0x04,
-    BASE_STATUS_CLEAN_DRAIN1      = 0x05,
-    BASE_STATUS_RINSE_SPRAY       = 0x06,
-    BASE_STATUS_CLEAN_DRAIN2      = 0x07,
-    BASE_STATUS_DRY               = 0x08,
-    BASE_STATUS_FORCE_DRAIN       = 0x09,
-    BASE_STATUS_SOLO_CLEAN_SPRAY  = 0x0A,
-    BASE_STATUS_SOLO_RINSE_SPRAY  = 0x0B,
-    BASE_STATUS_SOLO_DRY          = 0x0C,
+    BASE_STATUS_POWER_ON          = 0x00,
+    BASE_STATUS_SELFTEST          = 0x01,
+    BASE_STATUS_POWER_OFF         = 0x02,
+    BASE_STATUS_STANDBY           = 0x03,
+    BASE_STATUS_AUTO_FILLING      = 0x04,
+    BASE_STATUS_FILL_DONE_KEEP    = 0x05,
+    BASE_STATUS_FILL_DONE_WAIT    = 0x06,
+    BASE_STATUS_CLEAN_SPRAYING    = 0x07,
+    BASE_STATUS_CLEAN_DRAINING_1  = 0x08,
+    BASE_STATUS_RINSE_SPRAYING    = 0x09,
+    BASE_STATUS_CLEAN_DRAINING_2  = 0x0A,
+    BASE_STATUS_CLEAN_DRYING      = 0x0B,
+    BASE_STATUS_FORCE_DRAINING    = 0x0C,
+    BASE_STATUS_SOLO_CLEAN_SPRAYING = 0x0D,
+    BASE_STATUS_SOLO_RINSE_SPRAYING = 0x0E,
+    BASE_STATUS_SOLO_DRYING       = 0x0F,
 } base_status_t;
 
 typedef enum {
-    AMBIENT_ORANGE = 0x01,
-    AMBIENT_RED    = 0x02,
-    AMBIENT_YELLOW = 0x03,
-    AMBIENT_GREEN  = 0x04,
-    AMBIENT_BLUE   = 0x05,
-    AMBIENT_CYAN   = 0x06,
-    AMBIENT_PURPLE = 0x07,
-    AMBIENT_WHITE  = 0x08,
+    AMBIENT_ORANGE = 0x00,
+    AMBIENT_RED    = 0x01,
+    AMBIENT_YELLOW = 0x02,
+    AMBIENT_GREEN  = 0x03,
+    AMBIENT_BLUE   = 0x04,
+    AMBIENT_CYAN   = 0x05,
+    AMBIENT_PURPLE = 0x06,
+    AMBIENT_WHITE  = 0x07,
 } ambient_led_t;
 
 #define BUCKET_ERR1_LACK_OF_WATER     (1 << 0)
@@ -128,11 +184,10 @@ typedef struct {
     uint8_t     ext_byte;
 } protocol_frame_t;
 
-typedef void (*cmd_handler_t)(const protocol_frame_t *frame);
-
-void protocol_register_cmd(cmd_type_t cmd, cmd_handler_t handler);
+typedef bool (*protocol_frame_cb_t)(const protocol_frame_t *frame, void *user_data);
 
 uint8_t protocol_calc_checksum(const uint8_t *data, int len);
+bool protocol_verify_frame(const uint8_t *raw, int raw_len);
 
 bool protocol_parse(const uint8_t *raw, int raw_len, protocol_frame_t *frame);
 
@@ -141,9 +196,14 @@ void protocol_build(const protocol_frame_t *frame, uint8_t *out);
 int protocol_send_uart(const protocol_frame_t *frame);
 int protocol_send_net(const protocol_frame_t *frame);
 
+void protocol_stream_reset(void);
+int protocol_stream_input(const uint8_t *data, uint16_t len,
+                          protocol_frame_cb_t cb, void *user_data);
+
 void protocol_init(void);
 void protocol_deinit(void);
 
 void protocol_handler_init(void);
+void protocol_handler_deinit(void);
 
 #endif

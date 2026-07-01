@@ -25,10 +25,11 @@ static void switch_toggled(lv_event_t *e)
 {
     lv_obj_t *sw = lv_event_get_target(e);
 
-    if (lv_obj_has_state(sw, LV_STATE_CHECKED))
+    if (lv_obj_has_state(sw, LV_STATE_CHECKED)) {
         cmdarg.cmd = BT_ENABLE;
-    else
+    } else {
         cmdarg.cmd = BT_DISABLE;
+    }
     bt_query(&cmdarg, sizeof(cmdarg));
 }
 
@@ -55,10 +56,11 @@ lv_obj_t *menu_bt_init(lv_obj_t *parent)
     cmdarg.cmd = BT_INFO;
     cmdarg.val = &new_info;
     bt_query_wait(&cmdarg, sizeof(cmdarg));
-    if (new_info.bt_state == BT_STATE_ON)
+    if (new_info.bt_state == BT_STATE_ON) {
         lv_obj_add_state(bt_switch, LV_STATE_CHECKED);
-    else
+    } else {
         lv_obj_clear_state(bt_switch, LV_STATE_CHECKED);
+    }
 
     lv_obj_add_event_cb(bt_switch, switch_toggled, LV_EVENT_VALUE_CHANGED, NULL);
 

@@ -26,8 +26,7 @@ static int ai_write(void *arg, char *buf, int len)
 {
     struct audio_client *client = (struct audio_client *)arg;
 
-    if (!buf)
-    {
+    if (!buf) {
         RK_LOGE("buf is NULL");
         return 0;
     }
@@ -43,8 +42,7 @@ static void *do_cap(void *arg)
     int result = 0;
 
     result = ai_init();
-    if (result != 0)
-    {
+    if (result != 0) {
         RK_LOGE("ai init fail", result);
         client->state = STATE_ERROR;
         goto end;
@@ -53,8 +51,9 @@ static void *do_cap(void *arg)
     client->state = STATE_RUNNING;
     while (client->state == STATE_RUNNING)
     {
-        if (ai_fetch(ai_write, client) == -1)
+        if (ai_fetch(ai_write, client) == -1) {
             break;
+        }
     }
     ai_deinit();
 
@@ -70,8 +69,9 @@ int audio_client_state(void *arg)
 {
     struct audio_client *client = (struct audio_client *)arg;
 
-    if (!client)
+    if (!client) {
         return STATE_IDLE;
+    }
 
     return client->state;
 }
@@ -80,15 +80,13 @@ int audio_client_del(void *arg)
 {
     struct audio_client *client = (struct audio_client *)arg;
 
-    if (!client)
-    {
+    if (!client) {
         printf("%s null ptr\n", __func__);
         return -1;
     }
 
     client->state = STATE_EXIT;
-    if (client->tid)
-    {
+    if (client->tid) {
         pthread_join(client->tid, RK_NULL);
         client->tid = 0;
     }
@@ -104,10 +102,10 @@ int connect_timeout(int sockfd, struct sockaddr *serv_addr, int timeout)
     fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
 
     int n = connect(sockfd, serv_addr, sizeof(*serv_addr));
-    if (n < 0)
-    {
-        if (errno != EINPROGRESS && errno != EWOULDBLOCK)
+    if (n < 0) {
+        if (errno != EINPROGRESS && errno != EWOULDBLOCK) {
             return -1;
+        }
 
         struct timeval tv;
         tv.tv_sec = timeout / 1000;
@@ -116,12 +114,9 @@ int connect_timeout(int sockfd, struct sockaddr *serv_addr, int timeout)
         FD_ZERO(&wset);
         FD_SET(sockfd, &wset);
         n = select(sockfd + 1, NULL, &wset, NULL, &tv);
-        if (n < 0)
-        {
+        if (n < 0) {
             return -1;
-        }
-        else if (0 == n)
-        {
+        } else if (0 == n) {
             return 0;
         }
     }
@@ -138,15 +133,13 @@ void *audio_client_new(const char *ip)
     int ret;
 
     client = calloc(1, sizeof(*client));
-    if (!client)
-    {
+    if (!client) {
         printf("audio client calloc failed %d\n", sizeof(*client));
         return NULL;
     }
 
     fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0)
-    {
+    if (fd < 0) {
         printf("socket error\n");
         goto fd_err;
     }
@@ -158,15 +151,13 @@ void *audio_client_new(const char *ip)
     inet_pton(AF_INET, ip, &serveraddr.sin_addr.s_addr);
     serveraddr.sin_port = htons(9999);
     ret = connect_timeout(fd, (struct sockaddr *)&serveraddr, 3000);
-    if (ret <= 0)
-    {
+    if (ret <= 0) {
         printf("connect error\n");
         goto conn_err;
     }
 
     ret = pthread_create(&client->tid, NULL, do_cap, client);
-    if (ret < 0)
-    {
+    if (ret < 0) {
         printf("pthread error\n");
         goto conn_err;
     }

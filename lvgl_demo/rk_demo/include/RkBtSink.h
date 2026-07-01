@@ -19,9 +19,9 @@ typedef struct btmg_track_info_t
 } BtTrackInfo;
 
 typedef void (*RK_BT_AVRCP_TRACK_CHANGE_CB)(const char *bd_addr,
-        BtTrackInfo track_info);
+                                            BtTrackInfo track_info);
 typedef void (*RK_BT_AVRCP_PLAY_POSITION_CB)(const char *bd_addr, int song_len,
-        int song_pos);
+                                             int song_pos);
 
 int rk_bt_sink_register_track_callback(RK_BT_AVRCP_TRACK_CHANGE_CB cb);
 int rk_bt_sink_register_position_callback(RK_BT_AVRCP_PLAY_POSITION_CB cb);

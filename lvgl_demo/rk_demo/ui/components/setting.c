@@ -31,11 +31,11 @@ static void wifi_set_go_home(lv_event_t * e);
 
 static void setting_back_btn_event_cb(lv_event_t * e)
 {
-    if(lv_event_get_code(e) != LV_EVENT_CLICKED) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
         return;
     }
 
-    if(s_back_cb) {
+    if (s_back_cb) {
         s_back_cb();
     }
 }
@@ -101,7 +101,7 @@ static lv_obj_t * create_setting_item(lv_obj_t * parent,
 
 lv_obj_t * setting_create(lv_obj_t * parent)
 {
-    if(s_setting_root) {
+    if (s_setting_root) {
         return s_setting_root;
     }
 
@@ -150,7 +150,7 @@ lv_obj_t * setting_create(lv_obj_t * parent)
     lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
 
     /* 六个功能项
-       这里图标先用占位符，你后面换自己的图标字体编码即可 */
+         这里图标先用占位符，你后面换自己的图标字体编码即可 */
     create_setting_item(panel,  60,  90, "\xEE\x99\xB6", "模式设置",SETTING_ITEM_MODE);
     create_setting_item(panel, 220,  90, "\xEE\xA1\xAD", "声光时钟",SETTING_ITEM_CLOCK);
     create_setting_item(panel, 380,  90, "\xEE\xA0\xBF", "WLAN设置",SETTING_ITEM_WLAN);
@@ -192,19 +192,19 @@ lv_obj_t * setting_get_root(void)
 
 void setting_destroy(void)
 {
-    if(s_clk_light_page) {
+    if (s_clk_light_page) {
         lv_obj_del(s_clk_light_page);
         s_clk_light_page = NULL;
     }
 
-    if(s_wifi_set_page) {
+    if (s_wifi_set_page) {
         lv_obj_del(s_wifi_set_page);
         s_wifi_set_page = NULL;
     }
 
     setting_1_destroy();
 
-    if(s_setting_root) {
+    if (s_setting_root) {
         lv_obj_del(s_setting_root);
         s_setting_root = NULL;
     }
@@ -234,28 +234,28 @@ static void apply_dark_btn_style(lv_obj_t * obj, lv_coord_t radius)
 
 static void setting_item_event_cb(lv_event_t * e)
 {
-    if(lv_event_get_code(e) != LV_EVENT_CLICKED) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
         return;
     }
 
     setting_item_id_t item_id = (setting_item_id_t)(intptr_t)lv_event_get_user_data(e);
 
-    if(item_id == SETTING_ITEM_MODE) {
+    if (item_id == SETTING_ITEM_MODE) {
         open_setting_1_page();
         return;
     }
 
-    if(item_id == SETTING_ITEM_CLOCK) {
+    if (item_id == SETTING_ITEM_CLOCK) {
         open_clk_light_page();
         return;
     }
 
-    if(item_id == SETTING_ITEM_WLAN) {
+    if (item_id == SETTING_ITEM_WLAN) {
         open_wifi_set_page();
         return;
     }
 
-    if(s_item_cb) {
+    if (s_item_cb) {
         s_item_cb(item_id);
     }
 }
@@ -264,7 +264,7 @@ static void setting_1_back_to_setting(void)
 {
     setting_1_destroy();
 
-    if(s_setting_root) {
+    if (s_setting_root) {
         lv_obj_clear_flag(s_setting_root, LV_OBJ_FLAG_HIDDEN);
     }
 }
@@ -273,19 +273,19 @@ static void setting_1_go_home(void)
 {
     setting_1_destroy();
 
-    if(s_setting_root) {
+    if (s_setting_root) {
         lv_obj_del(s_setting_root);
         s_setting_root = NULL;
     }
 
-    if(s_back_cb) {
+    if (s_back_cb) {
         s_back_cb();
     }
 }
 
 static void open_setting_1_page(void)
 {
-    if(s_setting_root) {
+    if (s_setting_root) {
         lv_obj_add_flag(s_setting_root, LV_OBJ_FLAG_HIDDEN);
     }
 
@@ -296,11 +296,11 @@ static void open_setting_1_page(void)
 
 static void open_clk_light_page(void)
 {
-    if(s_setting_root) {
+    if (s_setting_root) {
         lv_obj_add_flag(s_setting_root, LV_OBJ_FLAG_HIDDEN);
     }
 
-    if(s_clk_light_page) {
+    if (s_clk_light_page) {
         lv_obj_del(s_clk_light_page);
         s_clk_light_page = NULL;
     }
@@ -312,11 +312,11 @@ static void open_clk_light_page(void)
 
 static void open_wifi_set_page(void)
 {
-    if(s_setting_root) {
+    if (s_setting_root) {
         lv_obj_add_flag(s_setting_root, LV_OBJ_FLAG_HIDDEN);
     }
 
-    if(s_wifi_set_page) {
+    if (s_wifi_set_page) {
         lv_obj_del(s_wifi_set_page);
         s_wifi_set_page = NULL;
     }
@@ -330,12 +330,12 @@ static void clk_light_back_to_setting(lv_event_t * e)
 {
     LV_UNUSED(e);
 
-    if(s_clk_light_page) {
+    if (s_clk_light_page) {
         lv_obj_del(s_clk_light_page);
         s_clk_light_page = NULL;
     }
 
-    if(s_setting_root) {
+    if (s_setting_root) {
         lv_obj_clear_flag(s_setting_root, LV_OBJ_FLAG_HIDDEN);
     }
 }
@@ -344,17 +344,17 @@ static void clk_light_go_home(lv_event_t * e)
 {
     LV_UNUSED(e);
 
-    if(s_clk_light_page) {
+    if (s_clk_light_page) {
         lv_obj_del(s_clk_light_page);
         s_clk_light_page = NULL;
     }
 
-    if(s_setting_root) {
+    if (s_setting_root) {
         lv_obj_del(s_setting_root);
         s_setting_root = NULL;
     }
 
-    if(s_back_cb) {
+    if (s_back_cb) {
         s_back_cb();
     }
 }
@@ -363,12 +363,12 @@ static void wifi_set_back_to_setting(lv_event_t * e)
 {
     LV_UNUSED(e);
 
-    if(s_wifi_set_page) {
+    if (s_wifi_set_page) {
         lv_obj_del(s_wifi_set_page);
         s_wifi_set_page = NULL;
     }
 
-    if(s_setting_root) {
+    if (s_setting_root) {
         lv_obj_clear_flag(s_setting_root, LV_OBJ_FLAG_HIDDEN);
     }
 }
@@ -377,17 +377,17 @@ static void wifi_set_go_home(lv_event_t * e)
 {
     LV_UNUSED(e);
 
-    if(s_wifi_set_page) {
+    if (s_wifi_set_page) {
         lv_obj_del(s_wifi_set_page);
         s_wifi_set_page = NULL;
     }
 
-    if(s_setting_root) {
+    if (s_setting_root) {
         lv_obj_del(s_setting_root);
         s_setting_root = NULL;
     }
 
-    if(s_back_cb) {
+    if (s_back_cb) {
         s_back_cb();
     }
 }

@@ -37,6 +37,6 @@ void uart_manager_deinit(void);
 /**
  * @brief 格式化打印串口数据
  */
-void serial_print_buf(unsigned char *buf, int len);
+void serial_print_buf(const char *direction, unsigned char *buf, int len);
 
 #endif

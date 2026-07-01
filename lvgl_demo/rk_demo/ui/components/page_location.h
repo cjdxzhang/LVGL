@@ -14,6 +14,7 @@ typedef struct {
 page_location_set_t page_location_create(lv_obj_t * parent,
                                          void (*show_page_cb)(lv_obj_t * page),
                                          lv_obj_t * page_main);
+void page_location_hide_all(void);
 
 #ifdef __cplusplus
 } /* extern "C" */

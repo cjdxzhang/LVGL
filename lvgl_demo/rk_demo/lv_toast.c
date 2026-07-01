@@ -67,8 +67,9 @@ static int remap(int from_min, int from_max, int to_min, int to_max, int val)
 
 static void toast_style_init(void)
 {
-    if (base_style.prop_cnt != 0)
+    if (base_style.prop_cnt != 0) {
         return;
+    }
 
     lv_style_init(&base_style);
     lv_style_set_bg_opa(&base_style, 0);
@@ -86,13 +87,10 @@ static void toast_fade_in_out(void *obj, int32_t x)
     lv_opa_t value = toast->opa;
     lv_coord_t ofs_y = 0;
 
-    if (x < fade_time)
-    {
+    if (x < fade_time) {
         value = remap(0, fade_time, 0, toast->opa, x);
         ofs_y = remap(0, fade_time, toast->start_offset, 0, x);
-    }
-    else if (x > toast->duration + fade_time)
-    {
+    } else if (x > toast->duration + fade_time) {
         x -= toast->duration + fade_time;
         value = remap(0, fade_time, toast->opa, 0, x);
     }
@@ -107,18 +105,18 @@ static void toast_deleted_cb(lv_anim_t *a)
     lv_obj_t *obj = (lv_obj_t *)a->var;
     lv_toast_t *toast = (lv_toast_t *)obj;
 
-    if (!toast->auto_delete)
+    if (!toast->auto_delete) {
         lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
-    else
+    } else {
         lv_obj_del(obj);
+    }
 }
 
 void lv_toast_show(lv_obj_t *obj)
 {
     lv_toast_t *toast = (lv_toast_t *)obj;
 
-    if (!lv_obj_has_flag(obj, LV_OBJ_FLAG_HIDDEN))
-    {
+    if (!lv_obj_has_flag(obj, LV_OBJ_FLAG_HIDDEN)) {
         /* Animation already start, restart it */
         lv_anim_del(obj, toast_fade_in_out);
     }

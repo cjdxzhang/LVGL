@@ -20,10 +20,11 @@ static lv_obj_t *btn_update_net;
 
 static void update_event_cb(lv_event_t *e)
 {
-    if (lv_obj_has_flag(cont_update, LV_OBJ_FLAG_HIDDEN))
+    if (lv_obj_has_flag(cont_update, LV_OBJ_FLAG_HIDDEN)) {
         lv_obj_clear_flag(cont_update, LV_OBJ_FLAG_HIDDEN);
-    else
+    } else {
         lv_obj_add_flag(cont_update, LV_OBJ_FLAG_HIDDEN);
+    }
     lv_obj_align_to(cont_update, area_info, LV_ALIGN_OUT_BOTTOM_RIGHT, 0, 0);
 }
 

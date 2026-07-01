@@ -42,35 +42,30 @@ void coffee_machine_png_box_scroll_callback(lv_event_t *event)
     lv_obj_t *screen = lv_event_get_target(event);
     scroll_value = lv_obj_get_scroll_left(screen);
     //printf("%d pixels are scrolled out on the left\n", scroll_value);
-    if (scroll_value > 0 && scroll_value <= 200)
-    {
+    if (scroll_value > 0 && scroll_value <= 200) {
         lv_img_set_zoom(coffee_1, 256);
         lv_img_set_zoom(coffee_2, 192);
         lv_label_set_text(coffee_machine_name, "美式咖啡");
     }
-    if (scroll_value > 200 && scroll_value <= 600)
-    {
+    if (scroll_value > 200 && scroll_value <= 600) {
         lv_img_set_zoom(coffee_1, 192);
         lv_img_set_zoom(coffee_2, 256);
         lv_img_set_zoom(coffee_3, 192);
         lv_label_set_text(coffee_machine_name, "意式咖啡");
     }
-    if (scroll_value > 600 && scroll_value <= 1000)
-    {
+    if (scroll_value > 600 && scroll_value <= 1000) {
         lv_img_set_zoom(coffee_2, 192);
         lv_img_set_zoom(coffee_3, 256);
         lv_img_set_zoom(coffee_4, 192);
         lv_label_set_text(coffee_machine_name, "美味拿铁");
     }
-    if (scroll_value > 1000 && scroll_value <= 1400)
-    {
+    if (scroll_value > 1000 && scroll_value <= 1400) {
         lv_img_set_zoom(coffee_3, 192);
         lv_img_set_zoom(coffee_4, 256);
         lv_img_set_zoom(coffee_5, 192);
         lv_label_set_text(coffee_machine_name, "卡布奇诺");
     }
-    if (scroll_value > 1400 && scroll_value <= 1800)
-    {
+    if (scroll_value > 1400 && scroll_value <= 1800) {
         lv_img_set_zoom(coffee_4, 192);
         lv_img_set_zoom(coffee_5, 256);
         lv_label_set_text(coffee_machine_name, "RK咖啡");
@@ -80,8 +75,9 @@ void coffee_machine_png_box_scroll_callback(lv_event_t *event)
 ///////////////////// SCREENS ////////////////////
 void coffee_machine_ui_init(void)
 {
-    if (main)
+    if (main) {
         return;
+    }
 
     main = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(main);
@@ -106,8 +102,7 @@ void coffee_machine_ui_init(void)
     lv_obj_set_width(coffee_machine_png_box, lv_pct(100));
     lv_obj_set_height(coffee_machine_png_box, 300);
     lv_obj_set_style_pad_hor(coffee_machine_png_box, (scr_w - 300) / 2, 0);
-    if (coffee_machine_png_box != NULL)
-    {
+    if (coffee_machine_png_box != NULL) {
         lv_obj_add_event_cb(coffee_machine_png_box,
                             coffee_machine_png_box_scroll_callback,
                             LV_EVENT_SCROLL, NULL);

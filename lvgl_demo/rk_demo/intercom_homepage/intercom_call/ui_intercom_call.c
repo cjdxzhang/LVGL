@@ -53,18 +53,18 @@ static const lv_btnmatrix_ctrl_t keyboard_ctrl[] =
 
 static void ui_call_cb(lv_event_t *e)
 {
-    if (!audio_server_connected(server))
+    if (!audio_server_connected(server)) {
         audio_server_connect(server, lv_textarea_get_text(ui_remote_ip));
-    else
+    } else {
         audio_server_disconnect(server);
+    }
 }
 
 static void btn_return_cb(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
     lv_obj_t *obj = lv_event_get_target(e);
-    if (code == LV_EVENT_CLICKED)
-    {
+    if (code == LV_EVENT_CLICKED) {
         intercom_homepage_ui_init();
         lv_obj_del(main);
         main = NULL;
@@ -81,18 +81,14 @@ static void state_update(lv_timer_t *timer)
 
     state = audio_server_state(server);
 
-    if (last_state != state)
-    {
+    if (last_state != state) {
         last_state = state;
-        if (state == STATE_RUNNING)
-        {
+        if (state == STATE_RUNNING) {
             lv_label_set_text(ui_call->spec_attr->children[0], "挂断");
             lv_obj_set_style_text_color(ui_call->spec_attr->children[0],
                                         lv_color_make(0xff, 0x0, 0x0),
                                         LV_PART_MAIN);
-        }
-        else
-        {
+        } else {
             lv_label_set_text(ui_call->spec_attr->children[0], "呼叫");
             lv_obj_set_style_text_color(ui_call->spec_attr->children[0],
                                         lv_color_black(),
@@ -106,8 +102,9 @@ void intercom_call_ui_init()
     lv_obj_t *label;
     char *ip;
 
-    if (main)
+    if (main) {
         return;
+    }
 
     main = lv_obj_create(lv_scr_act());
     lv_obj_remove_style_all(main);
@@ -131,13 +128,10 @@ void intercom_call_ui_init()
     lv_obj_set_width(ui_local_ip, lv_pct(100));
     lv_obj_add_style(ui_local_ip, &style_txt_m, LV_PART_MAIN);
     ip = get_local_ip();
-    if (ip)
-    {
+    if (ip) {
         lv_label_set_text(ui_local_ip, ip);
         free(ip);
-    }
-    else
-    {
+    } else {
         lv_label_set_text(ui_local_ip, "未联网");
     }
 
@@ -165,7 +159,8 @@ void intercom_call_ui_init()
 
     timer = lv_timer_create(state_update, 100, NULL);
     server = audio_server_new();
-    if (!server)
+    if (!server) {
         printf("create audio server failed\n");
+    }
 }
 #endif
