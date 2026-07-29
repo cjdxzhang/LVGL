@@ -8,6 +8,7 @@
 #include "gui_guider.h"
 #include "lv_port_init.h"
 #include "backlight_control.h"
+#include "app_manager.h"
 
 lv_ui guider_ui;
 
@@ -31,11 +32,13 @@ int main(int argc, char **argv)
     lv_port_init(0, 0, 180);
     setup_ui(&guider_ui);
 
-	while (!quit) {
-		lv_task_handler();
-		usleep(5000);
-	}
-	backlight_control_deinit();
+    while (!quit)
+    {
+        lv_task_handler();
+        usleep(5000);
+    }
+    app_manager_deinit();
+    backlight_control_deinit();
 
-	return 0;
+    return 0;
 }

@@ -1,5 +1,7 @@
 #include "wifi_manager.h"
 #include "app_log.h"
+#include <arpa/inet.h>
+#include <ifaddrs.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +22,7 @@
 // 回调最大数量
 #define MAX_CALLBACKS 5
 #define WIFI_STATUS_POLL_INTERVAL_SEC 2
+#define WIFI_DHCP_TIMEOUT_SEC 15
 
 // 扫描结果缓存
 static char scan_results[MAX_SCAN_RESULTS][MAX_SSID_LEN];
@@ -32,7 +35,9 @@ static pthread_mutex_t scan_mutex = PTHREAD_MUTEX_INITIALIZER;
 // 当前连接状态
 static bool current_connected = false;
 static char current_ssid[MAX_SSID_LEN] = {0};
+static char current_ipv4[INET_ADDRSTRLEN] = {0};
 static pthread_mutex_t status_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t status_update_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t status_monitor_thread;
 static bool status_monitor_started = false;
 static bool status_query_failure_reported = false;
@@ -46,8 +51,10 @@ static pthread_mutex_t callback_mutex = PTHREAD_MUTEX_INITIALIZER;
 static char *ssid_list[50];
 static int ssid_count = 0;
 
-static void clear_scan_results_locked(void) {
-    for (int i = 0; i < ssid_count; i++) {
+static void clear_scan_results_locked(void)
+{
+    for (int i = 0; i < ssid_count; i++)
+    {
         free(ssid_list[i]);
         ssid_list[i] = NULL;
     }
@@ -55,56 +62,66 @@ static void clear_scan_results_locked(void) {
 }
 
 // 辅助函数：执行命令并获取输出（简单封装）
-static int exec_command(const char *cmd, char *output, size_t output_size) {
+static int exec_command(const char *cmd, char *output, size_t output_size)
+{
     FILE *fp = popen(cmd, "r");
     if (fp == NULL) return -1;
-    
+
     size_t total = 0;
-    while (fgets(output + total, output_size - total, fp) != NULL) {
+    while (fgets(output + total, output_size - total, fp) != NULL)
+    {
         total = strlen(output);
         if (total >= output_size - 1) break;
     }
-    
+
     int status = pclose(fp);
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
 // 辅助函数：执行命令不关心输出
-static int exec_simple(const char *cmd) {
+static int exec_simple(const char *cmd)
+{
     int status = system(cmd);
     if (status == -1) return -1;
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
-static int ensure_wpa_config_has_ctrl_interface(void) {
+static int ensure_wpa_config_has_ctrl_interface(void)
+{
     FILE *fp = fopen(WPA_SUPPLICANT_CONF, "r");
     char content[2048] = {0};
     size_t len = 0;
     bool has_ctrl_interface = false;
 
-    if (fp != NULL) {
+    if (fp != NULL)
+    {
         len = fread(content, 1, sizeof(content) - 1, fp);
         fclose(fp);
-        if (strstr(content, "ctrl_interface=") != NULL) {
+        if (strstr(content, "ctrl_interface=") != NULL)
+        {
             has_ctrl_interface = true;
         }
     }
 
-    if (has_ctrl_interface) {
+    if (has_ctrl_interface)
+    {
         return 0;
     }
 
     fp = fopen(WPA_SUPPLICANT_CONF, "w");
-    if (fp == NULL) {
+    if (fp == NULL)
+    {
         return -1;
     }
 
-    if (fprintf(fp, "ctrl_interface=%s\nap_scan=1\n", WPA_CTRL_DIR) < 0) {
+    if (fprintf(fp, "ctrl_interface=%s\nap_scan=1\n", WPA_CTRL_DIR) < 0)
+    {
         fclose(fp);
         return -1;
     }
 
-    if (len > 0 && fwrite(content, 1, len, fp) != len) {
+    if (len > 0 && fwrite(content, 1, len, fp) != len)
+    {
         fclose(fp);
         return -1;
     }
@@ -112,11 +129,150 @@ static int ensure_wpa_config_has_ctrl_interface(void) {
     return fclose(fp) == 0 ? 0 : -1;
 }
 
-static int wpa_cli_is_ready(void) {
+static int wpa_cli_is_ready(void)
+{
     return exec_simple("wpa_cli -i wlan0 ping >/dev/null 2>&1") == 0;
 }
 
-static int write_wpa_config(FILE *fp, const char *ssid, const char *psk) {
+static int wifi_manager_clear_old_ipv4(void)
+{
+    int ret;
+
+    pthread_mutex_lock(&status_update_mutex);
+
+    /* 兼容升级设备上由旧 S99wifi 启动的 udhcpc。 */
+    exec_simple("killall udhcpc >/dev/null 2>&1");
+    ret = exec_simple("dhcpcd -k wlan0 >/dev/null 2>&1");
+    if (ret != 0)
+    {
+        WIFI_MANAGER_LOG_ERROR("释放 wlan0 旧 DHCP 租约失败: ret=%d", ret);
+        pthread_mutex_unlock(&status_update_mutex);
+        return -1;
+    }
+
+    ret = exec_simple("ip -4 addr flush dev wlan0 >/dev/null 2>&1");
+    if (ret != 0)
+    {
+        WIFI_MANAGER_LOG_ERROR("清理 wlan0 旧 IPv4 地址失败: ret=%d", ret);
+        pthread_mutex_unlock(&status_update_mutex);
+        return -1;
+    }
+
+    pthread_mutex_lock(&status_mutex);
+    current_ipv4[0] = '\0';
+    pthread_mutex_unlock(&status_mutex);
+
+    ret = exec_simple("ip route flush dev wlan0 >/dev/null 2>&1");
+    if (ret != 0)
+    {
+        WIFI_MANAGER_LOG_ERROR("清理 wlan0 旧路由失败: ret=%d", ret);
+        pthread_mutex_unlock(&status_update_mutex);
+        return -1;
+    }
+    pthread_mutex_unlock(&status_update_mutex);
+    return 0;
+}
+
+static bool wifi_manager_read_ipv4(char *buffer, size_t buffer_size)
+{
+    struct ifaddrs *interfaces = NULL;
+    struct ifaddrs *interface;
+    bool found = false;
+
+    if (buffer == NULL || buffer_size == 0)
+    {
+        return false;
+    }
+    buffer[0] = '\0';
+
+    if (getifaddrs(&interfaces) != 0)
+    {
+        return false;
+    }
+
+    for (interface = interfaces; interface != NULL; interface = interface->ifa_next)
+    {
+        struct sockaddr_in *address;
+        uint32_t host_address;
+
+        if (interface->ifa_addr == NULL ||
+                interface->ifa_addr->sa_family != AF_INET ||
+                strcmp(interface->ifa_name, "wlan0") != 0)
+        {
+            continue;
+        }
+
+        address = (struct sockaddr_in *)interface->ifa_addr;
+        host_address = ntohl(address->sin_addr.s_addr);
+        if (host_address == INADDR_ANY ||
+                host_address == INADDR_BROADCAST ||
+                (host_address & 0xff000000U) == 0x7f000000U ||
+                (host_address & 0xffff0000U) == 0xa9fe0000U ||
+                (host_address & 0xf0000000U) == 0xe0000000U ||
+                (host_address & 0xf0000000U) == 0xf0000000U)
+        {
+            continue;
+        }
+
+        if (inet_ntop(AF_INET, &address->sin_addr, buffer, buffer_size) != NULL &&
+                buffer[0] != '\0')
+        {
+            found = true;
+            break;
+        }
+        buffer[0] = '\0';
+    }
+
+    freeifaddrs(interfaces);
+    return found;
+}
+
+static bool wifi_manager_has_ipv4(void)
+{
+    char address[INET_ADDRSTRLEN] = {0};
+
+    return wifi_manager_read_ipv4(address, sizeof(address));
+}
+
+static int wifi_manager_request_ipv4(void)
+{
+    int i;
+    int ret;
+
+    ret = exec_simple("dhcpcd -n wlan0 >/dev/null 2>&1");
+    if (ret != 0)
+    {
+        WIFI_MANAGER_LOG_ERROR("请求 wlan0 DHCP 地址失败: ret=%d", ret);
+        return -1;
+    }
+
+    for (i = 0; i < WIFI_DHCP_TIMEOUT_SEC; i++)
+    {
+        if (wifi_manager_has_ipv4())
+        {
+            return 0;
+        }
+        sleep(1);
+    }
+
+    WIFI_MANAGER_LOG_WARN("等待 wlan0 DHCP 地址超时: timeout=%ds",
+                          WIFI_DHCP_TIMEOUT_SEC);
+    return -1;
+}
+
+static int wifi_manager_cleanup_legacy_dhcp(void)
+{
+    if (unlink("/etc/init.d/S99wifi") != 0 && errno != ENOENT)
+    {
+        WIFI_MANAGER_LOG_ERROR("清理旧 Wi-Fi 自启动脚本失败: %s", strerror(errno));
+        return -1;
+    }
+    exec_simple("killall udhcpc >/dev/null 2>&1");
+    return 0;
+}
+
+static int write_wpa_config(FILE *fp, const char *ssid, const char *psk)
+{
     if (fprintf(fp,
                 "ctrl_interface=%s\n"
                 "update_config=1\n"
@@ -127,7 +283,8 @@ static int write_wpa_config(FILE *fp, const char *ssid, const char *psk) {
                 "}\n",
                 WPA_CTRL_DIR,
                 ssid,
-                psk) < 0) {
+                psk) < 0)
+    {
         return -1;
     }
 
@@ -135,43 +292,54 @@ static int write_wpa_config(FILE *fp, const char *ssid, const char *psk) {
 }
 
 // 触发所有回调
-static void notify_status_change(bool connected, const char *ssid) {
+static void notify_status_change(bool connected, const char *ssid)
+{
     pthread_mutex_lock(&callback_mutex);
-    for (int i = 0; i < callback_count; i++) {
-        if (callbacks[i]) {
+    for (int i = 0; i < callback_count; i++)
+    {
+        if (callbacks[i])
+        {
             callbacks[i](connected, ssid, callback_user_data[i]);
         }
     }
     pthread_mutex_unlock(&callback_mutex);
 }
 
-static bool parse_wpa_status(const char *status, char *ssid, size_t ssid_size) {
+static bool parse_wpa_status(const char *status, char *ssid, size_t ssid_size)
+{
     bool connected = false;
     const char *line = status;
 
-    if (ssid != NULL && ssid_size > 0) {
+    if (ssid != NULL && ssid_size > 0)
+    {
         ssid[0] = '\0';
     }
 
-    while (line != NULL && line[0] != '\0') {
+    while (line != NULL && line[0] != '\0')
+    {
         const char *line_end = strchr(line, '\n');
         size_t line_len = line_end != NULL ? (size_t)(line_end - line) : strlen(line);
 
         if (line_len == strlen("wpa_state=COMPLETED") &&
-            strncmp(line, "wpa_state=COMPLETED", line_len) == 0) {
+                strncmp(line, "wpa_state=COMPLETED", line_len) == 0)
+        {
             connected = true;
-        } else if (strncmp(line, "ssid=", strlen("ssid=")) == 0 &&
-                   ssid != NULL && ssid_size > 0) {
+        }
+        else if (strncmp(line, "ssid=", strlen("ssid=")) == 0 &&
+                 ssid != NULL && ssid_size > 0)
+        {
             size_t copy_len = line_len - strlen("ssid=");
 
-            if (copy_len >= ssid_size) {
+            if (copy_len >= ssid_size)
+            {
                 copy_len = ssid_size - 1;
             }
             memcpy(ssid, line + strlen("ssid="), copy_len);
             ssid[copy_len] = '\0';
         }
 
-        if (line_end == NULL) {
+        if (line_end == NULL)
+        {
             break;
         }
         line = line_end + 1;
@@ -181,35 +349,51 @@ static bool parse_wpa_status(const char *status, char *ssid, size_t ssid_size) {
 }
 
 // 更新当前连接状态
-static void update_connection_status(void) {
+static void update_connection_status(void)
+{
     char buf[256] = {0};
+    char new_ipv4[INET_ADDRSTRLEN] = {0};
     char notify_ssid[MAX_SSID_LEN] = {0};
     bool status_changed = false;
     int ret;
 
+    pthread_mutex_lock(&status_update_mutex);
     ret = exec_command("wpa_cli -i wlan0 status 2>/dev/null", buf, sizeof(buf));
-    if (ret != 0 && !status_query_failure_reported) {
+    if (ret != 0 && !status_query_failure_reported)
+    {
         WIFI_MANAGER_LOG_WARN("查询 Wi-Fi 连接状态失败: ret=%d", ret);
         status_query_failure_reported = true;
-    } else if (ret == 0 && status_query_failure_reported) {
+    }
+    else if (ret == 0 && status_query_failure_reported)
+    {
         WIFI_MANAGER_LOG_USER("Wi-Fi 连接状态查询恢复");
         status_query_failure_reported = false;
     }
-    
+
     char new_ssid[MAX_SSID_LEN] = {0};
     bool new_connected = parse_wpa_status(buf, new_ssid, sizeof(new_ssid));
-    
+
+    if (new_connected)
+    {
+        wifi_manager_read_ipv4(new_ipv4, sizeof(new_ipv4));
+    }
+
     pthread_mutex_lock(&status_mutex);
-    if (new_connected != current_connected || strcmp(new_ssid, current_ssid) != 0) {
+    if (new_connected != current_connected || strcmp(new_ssid, current_ssid) != 0)
+    {
         current_connected = new_connected;
         strncpy(current_ssid, new_ssid, MAX_SSID_LEN - 1);
         current_ssid[MAX_SSID_LEN - 1] = '\0';
         strncpy(notify_ssid, current_ssid, MAX_SSID_LEN - 1);
         status_changed = true;
     }
+    strncpy(current_ipv4, new_ipv4, sizeof(current_ipv4) - 1);
+    current_ipv4[sizeof(current_ipv4) - 1] = '\0';
     pthread_mutex_unlock(&status_mutex);
+    pthread_mutex_unlock(&status_update_mutex);
 
-    if (status_changed) {
+    if (status_changed)
+    {
         WIFI_MANAGER_LOG_USER("连接状态变化: connected=%d ssid=%s",
                               new_connected ? 1 : 0,
                               notify_ssid[0] != '\0' ? notify_ssid : "<none>");
@@ -217,10 +401,12 @@ static void update_connection_status(void) {
     }
 }
 
-static void *wifi_status_monitor(void *arg) {
+static void *wifi_status_monitor(void *arg)
+{
     (void)arg;
 
-    while (true) {
+    while (true)
+    {
         sleep(WIFI_STATUS_POLL_INTERVAL_SEC);
         update_connection_status();
     }
@@ -228,15 +414,18 @@ static void *wifi_status_monitor(void *arg) {
     return NULL;
 }
 
-static void start_status_monitor(void) {
+static void start_status_monitor(void)
+{
     int ret;
 
-    if (status_monitor_started) {
+    if (status_monitor_started)
+    {
         return;
     }
 
     ret = pthread_create(&status_monitor_thread, NULL, wifi_status_monitor, NULL);
-    if (ret != 0) {
+    if (ret != 0)
+    {
         WIFI_MANAGER_LOG_ERROR("创建 Wi-Fi 状态监控线程失败: %s", strerror(ret));
         return;
     }
@@ -248,42 +437,52 @@ static void start_status_monitor(void) {
 }
 
 // 检查 wpa_supplicant 是否运行，如果没有则启动
-static void ensure_wpa_supplicant_running(void) {
+static void ensure_wpa_supplicant_running(void)
+{
     int ret;
 
-    if (ensure_wpa_config_has_ctrl_interface() != 0) {
+    if (ensure_wpa_config_has_ctrl_interface() != 0)
+    {
         WIFI_MANAGER_LOG_ERROR("准备 wpa_supplicant 配置失败: path=%s",
                                WPA_SUPPLICANT_CONF);
         return;
     }
 
-    if (wpa_cli_is_ready()) {
+    if (wpa_cli_is_ready())
+    {
         return;
     }
 
     WIFI_MANAGER_LOG_USER("wpa_supplicant 未运行，尝试启动");
     ret = exec_simple("mkdir -p /var/run/wpa_supplicant");
-    if (ret != 0) {
+    if (ret != 0)
+    {
         WIFI_MANAGER_LOG_ERROR("创建 wpa_supplicant 控制目录失败: ret=%d", ret);
     }
     exec_simple("killall wpa_supplicant >/dev/null 2>&1");
     ret = exec_simple("wpa_supplicant -B -i wlan0 -C /var/run/wpa_supplicant -c /etc/wpa_supplicant.conf >/dev/null 2>&1");
-    if (ret != 0) {
+    if (ret != 0)
+    {
         WIFI_MANAGER_LOG_ERROR("启动 wpa_supplicant 失败: ret=%d", ret);
     }
     sleep(2);
 }
 
 // 转义字符串中的特殊字符（用于 wpa_supplicant.conf）
-static int escape_string(const char *input, char *output, size_t out_size) {
+static int escape_string(const char *input, char *output, size_t out_size)
+{
     if (!input || !output || out_size == 0) return -1;
     size_t in_idx = 0, out_idx = 0;
-    while (input[in_idx] != '\0') {
+    while (input[in_idx] != '\0')
+    {
         if (input[in_idx] == '\n' || input[in_idx] == '\r') return -1;
-        if (input[in_idx] == '\\' || input[in_idx] == '"') {
+        if (input[in_idx] == '\\' || input[in_idx] == '"')
+        {
             if (out_idx + 2 >= out_size) return -1;
             output[out_idx++] = '\\';
-        } else if (out_idx + 1 >= out_size) {
+        }
+        else if (out_idx + 1 >= out_size)
+        {
             return -1;
         }
         output[out_idx++] = input[in_idx++];
@@ -294,7 +493,8 @@ static int escape_string(const char *input, char *output, size_t out_size) {
 
 // ========== 公共 API 实现 ==========
 
-void wifi_manager_init(void) {
+void wifi_manager_init(void)
+{
     pthread_mutex_init(&scan_mutex, NULL);
     pthread_mutex_init(&callback_mutex, NULL);
     ensure_wpa_supplicant_running();
@@ -303,13 +503,16 @@ void wifi_manager_init(void) {
     WIFI_MANAGER_LOG_USER("Wi-Fi 管理器初始化完成");
 }
 
-int wifi_manager_register_callback(wifi_status_callback_t callback, void *user_data) {
-    if (!callback) {
+int wifi_manager_register_callback(wifi_status_callback_t callback, void *user_data)
+{
+    if (!callback)
+    {
         WIFI_MANAGER_LOG_ERROR("注册状态回调失败: callback 为空");
         return -1;
     }
     pthread_mutex_lock(&callback_mutex);
-    if (callback_count >= MAX_CALLBACKS) {
+    if (callback_count >= MAX_CALLBACKS)
+    {
         pthread_mutex_unlock(&callback_mutex);
         WIFI_MANAGER_LOG_WARN("注册状态回调失败: 已达到上限 %d", MAX_CALLBACKS);
         return -1;
@@ -321,7 +524,8 @@ int wifi_manager_register_callback(wifi_status_callback_t callback, void *user_d
     return 0;
 }
 
-int wifi_manager_scan_start(void) {
+int wifi_manager_scan_start(void)
+{
     FILE *fp;
     char line[256];
     int result_count;
@@ -332,7 +536,8 @@ int wifi_manager_scan_start(void) {
 
     /* 1. 触发扫描 */
     fp = popen("wpa_cli scan", "r");
-    if (fp == NULL) {
+    if (fp == NULL)
+    {
         WIFI_MANAGER_LOG_ERROR("触发 Wi-Fi 扫描失败: %s", strerror(errno));
         return -1;
     }
@@ -348,12 +553,14 @@ int wifi_manager_scan_start(void) {
      * 请通过 SSH 登录板子后执行 `iwconfig` 命令确认 [citation:7]
      */
     fp = popen("wpa_cli -i wlan0 scan_results", "r");
-    if (fp == NULL) {
+    if (fp == NULL)
+    {
         WIFI_MANAGER_LOG_ERROR("读取 Wi-Fi 扫描结果失败: %s", strerror(errno));
         return -1;
     }
     /* 3. 解析结果并提取 SSID */
-    if (fgets(line, sizeof(line), fp) == NULL) {
+    if (fgets(line, sizeof(line), fp) == NULL)
+    {
         pclose(fp);
         WIFI_MANAGER_LOG_ERROR("Wi-Fi 扫描结果缺少表头");
         return -1;
@@ -361,15 +568,19 @@ int wifi_manager_scan_start(void) {
 
     pthread_mutex_lock(&scan_mutex);
     clear_scan_results_locked();
-    while (fgets(line, sizeof(line), fp) != NULL && ssid_count < MAX_SCAN_RESULTS) {
+    while (fgets(line, sizeof(line), fp) != NULL && ssid_count < MAX_SCAN_RESULTS)
+    {
         char *ssid_start = strrchr(line, '\t');
-        if (ssid_start != NULL) {
+        if (ssid_start != NULL)
+        {
             ssid_start++;
             char *ssid_end = strchr(ssid_start, '\n');
             if (ssid_end) *ssid_end = '\0';
-            if (strlen(ssid_start) > 0) {
+            if (strlen(ssid_start) > 0)
+            {
                 ssid_list[ssid_count] = strdup(ssid_start);
-                if (ssid_list[ssid_count] != NULL) {
+                if (ssid_list[ssid_count] != NULL)
+                {
                     ssid_count++;
                 }
             }
@@ -383,17 +594,20 @@ int wifi_manager_scan_start(void) {
     return 0;
 }
 
-int wifi_manager_get_scan_count(void) {
+int wifi_manager_get_scan_count(void)
+{
     pthread_mutex_lock(&scan_mutex);
     int cnt = ssid_count;
     pthread_mutex_unlock(&scan_mutex);
     return cnt;
 }
 
-int wifi_manager_get_scan_ssid(int index, char *buffer, size_t buffer_size) {
+int wifi_manager_get_scan_ssid(int index, char *buffer, size_t buffer_size)
+{
     if (!buffer || buffer_size == 0) return -1;
     pthread_mutex_lock(&scan_mutex);
-    if (index < 0 || index >= ssid_count) {
+    if (index < 0 || index >= ssid_count)
+    {
         pthread_mutex_unlock(&scan_mutex);
         return -1;
     }
@@ -403,59 +617,73 @@ int wifi_manager_get_scan_ssid(int index, char *buffer, size_t buffer_size) {
     return 0;
 }
 
-int wifi_manager_connect(const char *ssid, const char *psk) {
+int wifi_manager_connect(const char *ssid, const char *psk)
+{
     int ret;
 
-    if (!ssid || !psk || ssid[0] == '\0' || psk[0] == '\0') {
+    if (!ssid || !psk || ssid[0] == '\0' || psk[0] == '\0')
+    {
         WIFI_MANAGER_LOG_ERROR("连接 Wi-Fi 失败: SSID 或密码无效");
         return -1;
     }
 
     WIFI_MANAGER_LOG_USER("开始连接 Wi-Fi: ssid=%s", ssid);
-    
+
     // 写入配置文件
     char escaped_ssid[256], escaped_psk[256];
     if (escape_string(ssid, escaped_ssid, sizeof(escaped_ssid)) != 0 ||
-        escape_string(psk, escaped_psk, sizeof(escaped_psk)) != 0) {
+            escape_string(psk, escaped_psk, sizeof(escaped_psk)) != 0)
+    {
         WIFI_MANAGER_LOG_ERROR("连接 Wi-Fi 失败: SSID 或密码包含非法字符");
         return -1;
     }
-    
+
     FILE *fp = fopen("/tmp/wpa_tmp.conf", "w");
-    if (!fp) {
+    if (!fp)
+    {
         WIFI_MANAGER_LOG_ERROR("创建临时 Wi-Fi 配置失败: %s", strerror(errno));
         return -1;
     }
-    if (write_wpa_config(fp, escaped_ssid, escaped_psk) != 0) {
+    if (write_wpa_config(fp, escaped_ssid, escaped_psk) != 0)
+    {
         fclose(fp);
         WIFI_MANAGER_LOG_ERROR("写入临时 Wi-Fi 配置失败");
         return -1;
     }
     fclose(fp);
-    
+
     // 替换配置文件
     ret = exec_simple("cp /tmp/wpa_tmp.conf /etc/wpa_supplicant.conf");
     exec_simple("rm /tmp/wpa_tmp.conf");
-    if (ret != 0) {
+    if (ret != 0)
+    {
         WIFI_MANAGER_LOG_ERROR("安装 Wi-Fi 配置失败: ret=%d", ret);
     }
 
     ensure_wpa_supplicant_running();
-    
+
+    if (wifi_manager_clear_old_ipv4() != 0)
+    {
+        return -1;
+    }
+
     // 重新加载配置
     ret = exec_simple("wpa_cli -i wlan0 reconfigure 2>/dev/null");
-    if (ret != 0) {
+    if (ret != 0)
+    {
         WIFI_MANAGER_LOG_ERROR("重新加载 Wi-Fi 配置失败: ret=%d", ret);
     }
 
     exec_simple("wpa_cli -i wlan0 disconnect 2>/dev/null");
     ret = exec_simple("wpa_cli -i wlan0 reconnect 2>/dev/null");
-    if (ret != 0) {
+    if (ret != 0)
+    {
         WIFI_MANAGER_LOG_ERROR("重新连接 Wi-Fi 失败: ret=%d", ret);
     }
-    
+
     // 等待连接
-    for (int i = 0; i < 15; i++) {
+    for (int i = 0; i < 15; i++)
+    {
         bool connected;
         char connected_ssid[MAX_SSID_LEN] = {0};
 
@@ -465,8 +693,13 @@ int wifi_manager_connect(const char *ssid, const char *psk) {
         connected = current_connected;
         strncpy(connected_ssid, current_ssid, sizeof(connected_ssid) - 1);
         pthread_mutex_unlock(&status_mutex);
-        if (connected && strcmp(connected_ssid, ssid) == 0) {
-            exec_simple("dhcpcd -n wlan0 >/dev/null 2>&1 || udhcpc -i wlan0 -b >/dev/null 2>&1");
+        if (connected && strcmp(connected_ssid, ssid) == 0)
+        {
+            if (wifi_manager_request_ipv4() != 0)
+            {
+                WIFI_MANAGER_LOG_ERROR("连接 Wi-Fi 后获取 IPv4 地址失败: ssid=%s", ssid);
+                return -1;
+            }
             update_connection_status();
             WIFI_MANAGER_LOG_USER("连接 Wi-Fi 成功: ssid=%s", ssid);
             return 0;
@@ -477,7 +710,8 @@ int wifi_manager_connect(const char *ssid, const char *psk) {
     return -1;
 }
 
-bool wifi_manager_is_connected(void) {
+bool wifi_manager_is_connected(void)
+{
     bool connected;
 
     update_connection_status();
@@ -487,7 +721,8 @@ bool wifi_manager_is_connected(void) {
     return connected;
 }
 
-int wifi_manager_get_current_ssid(char *buffer, size_t buffer_size) {
+int wifi_manager_get_current_ssid(char *buffer, size_t buffer_size)
+{
     if (!buffer || buffer_size == 0) return -1;
     update_connection_status();
     pthread_mutex_lock(&status_mutex);
@@ -497,25 +732,52 @@ int wifi_manager_get_current_ssid(char *buffer, size_t buffer_size) {
     return strlen(buffer) > 0 ? 0 : -1;
 }
 
-int wifi_manager_disconnect(void) {
-    int ret = exec_simple("wpa_cli -i wlan0 disconnect 2>/dev/null");
-    if (ret == 0) {
+int wifi_manager_get_current_ipv4(char *buffer, size_t buffer_size)
+{
+    if (buffer == NULL || buffer_size == 0)
+    {
+        return -1;
+    }
+
+    pthread_mutex_lock(&status_mutex);
+    strncpy(buffer, current_ipv4, buffer_size - 1);
+    buffer[buffer_size - 1] = '\0';
+    pthread_mutex_unlock(&status_mutex);
+    return buffer[0] != '\0' ? 0 : -1;
+}
+
+int wifi_manager_disconnect(void)
+{
+    int ret;
+
+    pthread_mutex_lock(&status_update_mutex);
+    ret = exec_simple("wpa_cli -i wlan0 disconnect 2>/dev/null");
+    if (ret == 0)
+    {
         pthread_mutex_lock(&status_mutex);
         current_connected = false;
         current_ssid[0] = '\0';
+        current_ipv4[0] = '\0';
         pthread_mutex_unlock(&status_mutex);
+    }
+    else
+    {
+        WIFI_MANAGER_LOG_ERROR("断开 Wi-Fi 失败: ret=%d", ret);
+    }
+    pthread_mutex_unlock(&status_update_mutex);
+
+    if (ret == 0)
+    {
         WIFI_MANAGER_LOG_USER("Wi-Fi 已断开");
         notify_status_change(false, "");
-    } else {
-        WIFI_MANAGER_LOG_ERROR("断开 Wi-Fi 失败: ret=%d", ret);
     }
     return ret;
 }
 
-int wifi_manager_persist_config(const char *ssid, const char *psk) {
-    int ret;
-
-    if (ssid == NULL || psk == NULL) {
+int wifi_manager_persist_config(const char *ssid, const char *psk)
+{
+    if (ssid == NULL || psk == NULL)
+    {
         WIFI_MANAGER_LOG_ERROR("保存 Wi-Fi 配置失败: SSID 或密码为空");
         return -1;
     }
@@ -523,51 +785,33 @@ int wifi_manager_persist_config(const char *ssid, const char *psk) {
     // 先写入配置文件
     char escaped_ssid[256], escaped_psk[256];
     if (escape_string(ssid, escaped_ssid, sizeof(escaped_ssid)) != 0 ||
-        escape_string(psk, escaped_psk, sizeof(escaped_psk)) != 0) {
+            escape_string(psk, escaped_psk, sizeof(escaped_psk)) != 0)
+    {
         WIFI_MANAGER_LOG_ERROR("保存 Wi-Fi 配置失败: SSID 或密码包含非法字符");
         return -1;
     }
-    
+
     FILE *fp = fopen("/etc/wpa_supplicant.conf", "w");
-    if (!fp) {
+    if (!fp)
+    {
         WIFI_MANAGER_LOG_ERROR("打开 Wi-Fi 配置失败: path=%s error=%s",
                                WPA_SUPPLICANT_CONF, strerror(errno));
         return -1;
     }
-    if (write_wpa_config(fp, escaped_ssid, escaped_psk) != 0) {
+    if (write_wpa_config(fp, escaped_ssid, escaped_psk) != 0)
+    {
         fclose(fp);
         WIFI_MANAGER_LOG_ERROR("写入 Wi-Fi 配置失败: path=%s",
                                WPA_SUPPLICANT_CONF);
         return -1;
     }
     fclose(fp);
-    
-    // 创建开机启动脚本
-    const char *script_cmd = 
-        "cat > /etc/init.d/S99wifi << 'EOF'\n"
-        "#!/bin/sh\n"
-        "case \"$1\" in\n"
-        "    start)\n"
-        "        sleep 2\n"
-        "        mkdir -p /var/run/wpa_supplicant\n"
-        "        wpa_supplicant -B -i wlan0 -C /var/run/wpa_supplicant -c /etc/wpa_supplicant.conf\n"
-        "        sleep 3\n"
-        "        udhcpc -i wlan0 -b\n"
-        "        ;;\n"
-        "    stop)\n"
-        "        killall wpa_supplicant 2>/dev/null\n"
-        "        killall udhcpc 2>/dev/null\n"
-        "        ;;\n"
-        "esac\n"
-        "exit 0\n"
-        "EOF\n"
-        "chmod +x /etc/init.d/S99wifi\n";
-    
-    ret = exec_simple(script_cmd);
-    if (ret != 0) {
-        WIFI_MANAGER_LOG_ERROR("创建 Wi-Fi 自启动脚本失败: ret=%d", ret);
-    } else {
-        WIFI_MANAGER_LOG_USER("Wi-Fi 配置保存成功: ssid=%s", ssid);
+
+    /* 新固件由 S41dhcpcd 统一管理 wlan0，清理旧版本生成的双客户端入口。 */
+    if (wifi_manager_cleanup_legacy_dhcp() != 0)
+    {
+        return -1;
     }
+    WIFI_MANAGER_LOG_USER("Wi-Fi 配置保存成功: ssid=%s", ssid);
     return 0;
 }

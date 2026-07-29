@@ -31,6 +31,9 @@ bool wifi_manager_is_connected(void);
 // 获取当前连接的 SSID（拷贝到 buffer）
 int wifi_manager_get_current_ssid(char *buffer, size_t buffer_size);
 
+// 获取后台缓存的 wlan0 IPv4（拷贝到 buffer，不执行网络查询）
+int wifi_manager_get_current_ipv4(char *buffer, size_t buffer_size);
+
 // 断开当前连接
 int wifi_manager_disconnect(void);
 

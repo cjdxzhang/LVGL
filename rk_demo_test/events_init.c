@@ -48,15 +48,18 @@ static void conf_wifi_refresh_ssid_dropdown(lv_ui *ui)
     size_t used = 0;
     int scan_count;
 
-    if (ui == NULL || ui->conf_wifi_wifi_ssid == NULL) {
+    if (ui == NULL || ui->conf_wifi_wifi_ssid == NULL)
+    {
         return;
     }
 
     scan_count = wifi_manager_get_scan_count();
-    for (int index = 0; index < scan_count; index++) {
+    for (int index = 0; index < scan_count; index++)
+    {
         int written;
 
-        if (wifi_manager_get_scan_ssid(index, ssid, sizeof(ssid)) != 0 || ssid[0] == '\0') {
+        if (wifi_manager_get_scan_ssid(index, ssid, sizeof(ssid)) != 0 || ssid[0] == '\0')
+        {
             continue;
         }
 
@@ -65,7 +68,8 @@ static void conf_wifi_refresh_ssid_dropdown(lv_ui *ui)
                            "%s%s",
                            used == 0 ? "" : "\n",
                            ssid);
-        if (written < 0 || (size_t)written >= sizeof(options) - used) {
+        if (written < 0 || (size_t)written >= sizeof(options) - used)
+        {
             break;
         }
 
@@ -73,7 +77,8 @@ static void conf_wifi_refresh_ssid_dropdown(lv_ui *ui)
     }
 
     lv_dropdown_set_options(ui->conf_wifi_wifi_ssid, options);
-    if (used > 0) {
+    if (used > 0)
+    {
         lv_dropdown_set_selected(ui->conf_wifi_wifi_ssid, 0);
     }
 }
@@ -82,8 +87,14 @@ static lv_obj_t *g_mode_option_dialog = NULL;
 static lv_obj_t *g_mode_option_roller = NULL;
 static lv_obj_t *g_mode_option_dropdown = NULL;
 static lv_timer_t *g_conf_wifi_scan_timer = NULL;
+static lv_timer_t *g_conf_wifi_ip_timer = NULL;
+static lv_obj_t *g_conf_wifi_ip_timer_screen = NULL;
 
-typedef struct {
+#define CONF_WIFI_IPV4_TEXT_SIZE 16
+#define CONF_WIFI_IP_REFRESH_INTERVAL_MS 2000
+
+typedef struct
+{
     pthread_mutex_t mutex;
     bool running;
     bool finished;
@@ -94,7 +105,8 @@ typedef struct {
     lv_timer_t *poll_timer;
 } conf_wifi_connect_job_t;
 
-static conf_wifi_connect_job_t g_conf_wifi_connect_job = {
+static conf_wifi_connect_job_t g_conf_wifi_connect_job =
+{
     .mutex = PTHREAD_MUTEX_INITIALIZER
 };
 
@@ -111,7 +123,8 @@ static bool conf_wifi_connect_is_running(void)
 static void conf_wifi_set_status(lv_ui *ui, const char *text, uint32_t color)
 {
     if (ui == NULL || ui->conf_wifi_status_label == NULL ||
-        !lv_obj_is_valid(ui->conf_wifi_status_label)) {
+            !lv_obj_is_valid(ui->conf_wifi_status_label))
+    {
         return;
     }
 
@@ -120,20 +133,98 @@ static void conf_wifi_set_status(lv_ui *ui, const char *text, uint32_t color)
                                 LV_PART_MAIN | LV_STATE_DEFAULT);
 }
 
-static void conf_wifi_set_connect_button_running(lv_ui *ui, bool running)
+static void conf_wifi_refresh_ip(lv_ui *ui)
 {
-    if (ui == NULL || ui->conf_wifi_btn_2 == NULL ||
-        !lv_obj_is_valid(ui->conf_wifi_btn_2)) {
+    char ipv4[CONF_WIFI_IPV4_TEXT_SIZE] = {0};
+    const char *current_text;
+
+    if (ui == NULL || ui->conf_wifi_ip_label == NULL ||
+            !lv_obj_is_valid(ui->conf_wifi_ip_label))
+    {
         return;
     }
 
-    if (ui->conf_wifi_btn_2_label != NULL && lv_obj_is_valid(ui->conf_wifi_btn_2_label)) {
+    if (wifi_manager_get_current_ipv4(ipv4, sizeof(ipv4)) != 0)
+    {
+        current_text = lv_label_get_text(ui->conf_wifi_ip_label);
+        if (current_text != NULL && current_text[0] != '\0')
+        {
+            lv_label_set_text(ui->conf_wifi_ip_label, "");
+        }
+        if (!lv_obj_has_flag(ui->conf_wifi_ip_label, LV_OBJ_FLAG_HIDDEN))
+        {
+            lv_obj_add_flag(ui->conf_wifi_ip_label, LV_OBJ_FLAG_HIDDEN);
+        }
+        return;
+    }
+
+    current_text = lv_label_get_text(ui->conf_wifi_ip_label);
+    if (current_text == NULL || strcmp(current_text, ipv4) != 0)
+    {
+        lv_label_set_text(ui->conf_wifi_ip_label, ipv4);
+    }
+    lv_obj_remove_flag(ui->conf_wifi_ip_label, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void conf_wifi_ip_timer_cb(lv_timer_t *timer)
+{
+    lv_ui *ui = (lv_ui *)lv_timer_get_user_data(timer);
+
+    conf_wifi_refresh_ip(ui);
+}
+
+static void conf_wifi_stop_ip_timer(lv_obj_t *screen)
+{
+    if (screen != NULL && screen != g_conf_wifi_ip_timer_screen)
+    {
+        return;
+    }
+
+    if (g_conf_wifi_ip_timer != NULL)
+    {
+        lv_timer_delete(g_conf_wifi_ip_timer);
+        g_conf_wifi_ip_timer = NULL;
+    }
+    g_conf_wifi_ip_timer_screen = NULL;
+}
+
+static void conf_wifi_start_ip_timer(lv_ui *ui)
+{
+    if (ui == NULL || ui->conf_wifi == NULL)
+    {
+        return;
+    }
+
+    conf_wifi_stop_ip_timer(NULL);
+    conf_wifi_refresh_ip(ui);
+    g_conf_wifi_ip_timer = lv_timer_create(conf_wifi_ip_timer_cb,
+                                           CONF_WIFI_IP_REFRESH_INTERVAL_MS,
+                                           ui);
+    if (g_conf_wifi_ip_timer != NULL)
+    {
+        g_conf_wifi_ip_timer_screen = ui->conf_wifi;
+    }
+}
+
+static void conf_wifi_set_connect_button_running(lv_ui *ui, bool running)
+{
+    if (ui == NULL || ui->conf_wifi_btn_2 == NULL ||
+            !lv_obj_is_valid(ui->conf_wifi_btn_2))
+    {
+        return;
+    }
+
+    if (ui->conf_wifi_btn_2_label != NULL && lv_obj_is_valid(ui->conf_wifi_btn_2_label))
+    {
         lv_label_set_text(ui->conf_wifi_btn_2_label, "连接");
     }
 
-    if (running) {
+    if (running)
+    {
         lv_obj_add_state(ui->conf_wifi_btn_2, LV_STATE_DISABLED);
-    } else {
+    }
+    else
+    {
         lv_obj_remove_state(ui->conf_wifi_btn_2, LV_STATE_DISABLED);
     }
 }
@@ -158,7 +249,8 @@ static void conf_wifi_connect_poll_timer_cb(lv_timer_t *timer)
 
     pthread_mutex_lock(&g_conf_wifi_connect_job.mutex);
     finished = g_conf_wifi_connect_job.finished;
-    if (finished) {
+    if (finished)
+    {
         result = g_conf_wifi_connect_job.result;
         ui = g_conf_wifi_connect_job.ui;
         g_conf_wifi_connect_job.running = false;
@@ -167,14 +259,18 @@ static void conf_wifi_connect_poll_timer_cb(lv_timer_t *timer)
     }
     pthread_mutex_unlock(&g_conf_wifi_connect_job.mutex);
 
-    if (!finished) {
+    if (!finished)
+    {
         return;
     }
 
     conf_wifi_set_connect_button_running(ui, false);
-    if (result == 0) {
+    if (result == 0)
+    {
         conf_wifi_set_status(ui, "连接成功", 0x4caf50);
-    } else {
+    }
+    else
+    {
         conf_wifi_set_status(ui, "连接失败，请重试", 0xff6b6b);
     }
     lv_timer_delete(timer);
@@ -186,17 +282,20 @@ static int conf_wifi_connect_start(lv_ui *ui, const char *ssid, const char *psk)
     lv_timer_t *poll_timer;
     int create_result;
 
-    if (ui == NULL || ssid == NULL || psk == NULL || ssid[0] == '\0' || psk[0] == '\0') {
+    if (ui == NULL || ssid == NULL || psk == NULL || ssid[0] == '\0' || psk[0] == '\0')
+    {
         conf_wifi_set_status(ui, "请选择 WiFi 并输入密码", 0xff6b6b);
         return -1;
     }
 
-    if (conf_wifi_connect_is_running()) {
+    if (conf_wifi_connect_is_running())
+    {
         return 0;
     }
 
     poll_timer = lv_timer_create(conf_wifi_connect_poll_timer_cb, 100, NULL);
-    if (poll_timer == NULL) {
+    if (poll_timer == NULL)
+    {
         conf_wifi_set_status(ui, "连接任务启动失败", 0xff6b6b);
         return -1;
     }
@@ -214,7 +313,8 @@ static int conf_wifi_connect_start(lv_ui *ui, const char *ssid, const char *psk)
     conf_wifi_set_status(ui, "", 0xffffff);
     conf_wifi_set_connect_button_running(ui, true);
     create_result = pthread_create(&worker, NULL, conf_wifi_connect_worker, &g_conf_wifi_connect_job);
-    if (create_result != 0) {
+    if (create_result != 0)
+    {
         pthread_mutex_lock(&g_conf_wifi_connect_job.mutex);
         g_conf_wifi_connect_job.running = false;
         g_conf_wifi_connect_job.finished = false;
@@ -232,7 +332,8 @@ static int conf_wifi_connect_start(lv_ui *ui, const char *ssid, const char *psk)
 
 static void mode_option_dialog_deleted_event_cb(lv_event_t *e)
 {
-    if (lv_event_get_target(e) == g_mode_option_dialog) {
+    if (lv_event_get_target(e) == g_mode_option_dialog)
+    {
         g_mode_option_dialog = NULL;
         g_mode_option_roller = NULL;
         g_mode_option_dropdown = NULL;
@@ -241,9 +342,12 @@ static void mode_option_dialog_deleted_event_cb(lv_event_t *e)
 
 static void mode_option_dialog_close(void)
 {
-    if (g_mode_option_dialog != NULL && lv_obj_is_valid(g_mode_option_dialog)) {
+    if (g_mode_option_dialog != NULL && lv_obj_is_valid(g_mode_option_dialog))
+    {
         lv_obj_del(g_mode_option_dialog);
-    } else {
+    }
+    else
+    {
         g_mode_option_dialog = NULL;
         g_mode_option_roller = NULL;
         g_mode_option_dropdown = NULL;
@@ -252,21 +356,24 @@ static void mode_option_dialog_close(void)
 
 static void mode_option_dialog_cancel_event_cb(lv_event_t *e)
 {
-    if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+    if (lv_event_get_code(e) == LV_EVENT_CLICKED)
+    {
         mode_option_dialog_close();
     }
 }
 
 static void mode_option_dialog_confirm_event_cb(lv_event_t *e)
 {
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED)
+    {
         return;
     }
 
     if (g_mode_option_dropdown != NULL &&
-        lv_obj_is_valid(g_mode_option_dropdown) &&
-        g_mode_option_roller != NULL &&
-        lv_obj_is_valid(g_mode_option_roller)) {
+            lv_obj_is_valid(g_mode_option_dropdown) &&
+            g_mode_option_roller != NULL &&
+            lv_obj_is_valid(g_mode_option_roller))
+    {
         lv_dropdown_set_selected(g_mode_option_dropdown,
                                  lv_roller_get_selected(g_mode_option_roller));
     }
@@ -289,22 +396,25 @@ static void mode_option_dialog_show(lv_ui *ui,
     uint16_t selected;
 
     if (ui == NULL ||
-        ui->conf_mode_detail == NULL ||
-        !lv_obj_is_valid(ui->conf_mode_detail) ||
-        dropdown == NULL ||
-        !lv_obj_is_valid(dropdown) ||
-        title_text == NULL ||
-        options == NULL ||
-        option_count == 0) {
+            ui->conf_mode_detail == NULL ||
+            !lv_obj_is_valid(ui->conf_mode_detail) ||
+            dropdown == NULL ||
+            !lv_obj_is_valid(dropdown) ||
+            title_text == NULL ||
+            options == NULL ||
+            option_count == 0)
+    {
         return;
     }
 
-    if (g_mode_option_dialog != NULL && lv_obj_is_valid(g_mode_option_dialog)) {
+    if (g_mode_option_dialog != NULL && lv_obj_is_valid(g_mode_option_dialog))
+    {
         return;
     }
 
     selected = lv_dropdown_get_selected(dropdown);
-    if (selected >= option_count) {
+    if (selected >= option_count)
+    {
         selected = (uint16_t)(option_count - 1);
     }
     g_mode_option_dropdown = dropdown;
@@ -318,7 +428,8 @@ static void mode_option_dialog_show(lv_ui *ui,
     lv_obj_set_style_radius(g_mode_option_dialog, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_width(g_mode_option_dialog, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_pad_all(g_mode_option_dialog, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_bg_color(g_mode_option_dialog, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(g_mode_option_dialog, lv_color_hex(0x000000),
+                              LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(g_mode_option_dialog, 130, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_add_event_cb(g_mode_option_dialog,
                         mode_option_dialog_deleted_event_cb,
@@ -339,7 +450,8 @@ static void mode_option_dialog_show(lv_ui *ui,
 
     title = lv_label_create(panel);
     lv_label_set_text(title, title_text);
-    lv_obj_set_style_text_font(title, &lv_font_SourceHanSansSC_Regular_25, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(title, &lv_font_SourceHanSansSC_Regular_25,
+                               LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(title, lv_color_hex(0x333333), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 18);
 
@@ -349,15 +461,21 @@ static void mode_option_dialog_show(lv_ui *ui,
     lv_roller_set_selected(g_mode_option_roller, selected, LV_ANIM_OFF);
     lv_obj_set_width(g_mode_option_roller, 220);
     lv_obj_align(g_mode_option_roller, LV_ALIGN_TOP_MID, 0, 60);
-    lv_obj_set_style_text_font(g_mode_option_roller, &lv_font_SourceHanSansSC_Regular_25, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_align(g_mode_option_roller, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_color(g_mode_option_roller, lv_color_hex(0x8a8a8a), LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_bg_color(g_mode_option_roller, lv_color_hex(0xf5f2f8), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(g_mode_option_roller, &lv_font_SourceHanSansSC_Regular_25,
+                               LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_align(g_mode_option_roller, LV_TEXT_ALIGN_CENTER,
+                                LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(g_mode_option_roller, lv_color_hex(0x8a8a8a),
+                                LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(g_mode_option_roller, lv_color_hex(0xf5f2f8),
+                              LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(g_mode_option_roller, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_width(g_mode_option_roller, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_radius(g_mode_option_roller, 12, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_color(g_mode_option_roller, lv_color_hex(0x937dad), LV_PART_SELECTED | LV_STATE_DEFAULT);
-    lv_obj_set_style_bg_color(g_mode_option_roller, lv_color_hex(0xe7deef), LV_PART_SELECTED | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_color(g_mode_option_roller, lv_color_hex(0x937dad),
+                                LV_PART_SELECTED | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(g_mode_option_roller, lv_color_hex(0xe7deef),
+                              LV_PART_SELECTED | LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(g_mode_option_roller, 255, LV_PART_SELECTED | LV_STATE_DEFAULT);
     lv_obj_set_style_text_font(g_mode_option_roller, &lv_font_SourceHanSansSC_Regular_25,
                                LV_PART_SELECTED | LV_STATE_DEFAULT);
@@ -370,7 +488,8 @@ static void mode_option_dialog_show(lv_ui *ui,
     lv_obj_add_event_cb(cancel_btn, mode_option_dialog_cancel_event_cb, LV_EVENT_CLICKED, NULL);
     cancel_label = lv_label_create(cancel_btn);
     lv_label_set_text(cancel_label, "取消");
-    lv_obj_set_style_text_font(cancel_label, &lv_font_SourceHanSansSC_Regular_25, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(cancel_label, &lv_font_SourceHanSansSC_Regular_25,
+                               LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(cancel_label, lv_color_hex(0x555555), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_center(cancel_label);
 
@@ -382,14 +501,16 @@ static void mode_option_dialog_show(lv_ui *ui,
     lv_obj_add_event_cb(confirm_btn, mode_option_dialog_confirm_event_cb, LV_EVENT_CLICKED, NULL);
     confirm_label = lv_label_create(confirm_btn);
     lv_label_set_text(confirm_label, "确认");
-    lv_obj_set_style_text_font(confirm_label, &lv_font_SourceHanSansSC_Regular_25, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(confirm_label, &lv_font_SourceHanSansSC_Regular_25,
+                               LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(confirm_label, lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_center(confirm_label);
 }
 
 static void conf_wifi_cancel_scan_timer(void)
 {
-    if (g_conf_wifi_scan_timer != NULL) {
+    if (g_conf_wifi_scan_timer != NULL)
+    {
         lv_timer_delete(g_conf_wifi_scan_timer);
         g_conf_wifi_scan_timer = NULL;
     }
@@ -403,13 +524,15 @@ static void conf_wifi_scan_timer_cb(lv_timer_t *timer)
     lv_timer_delete(timer);
 
     if (ui == NULL ||
-        ui->conf_wifi == NULL ||
-        !lv_obj_is_valid(ui->conf_wifi) ||
-        lv_screen_active() != ui->conf_wifi) {
+            ui->conf_wifi == NULL ||
+            !lv_obj_is_valid(ui->conf_wifi) ||
+            lv_screen_active() != ui->conf_wifi)
+    {
         return;
     }
 
-    if (wifi_manager_scan_start() != 0) {
+    if (wifi_manager_scan_start() != 0)
+    {
         printf("wifi scan failed\n");
     }
     conf_wifi_refresh_ssid_dropdown(ui);
@@ -428,33 +551,35 @@ static void conf_wifi_schedule_scan(lv_ui *ui)
 #include "system_manager.h"
 
 #include "system_manager.h"
-#include "robot_tcp.h"
 
-static void index_event_handler (lv_event_t *e)
+static void index_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_SCREEN_LOADED:
     {
         lv_ui *ui = lv_event_get_user_data(e);
-        if (ui != NULL) {
+        if (ui != NULL)
+        {
             custom_ui_init(ui);
             index_page_init(ui);
-            if(!_is_index_page_initialized) {
+            if (!_is_index_page_initialized)
+            {
 
-                lv_obj_t* btn_plus = imgbtn_create(ui->index, &_plus_RGB565A8_50x50, "", 186, 239, 92, 92);
+                lv_obj_t *btn_plus = imgbtn_create(ui->index, &_plus_RGB565A8_50x50, "", 186, 239, 92, 92);
                 lv_obj_add_event_cb(btn_plus, plus_clicked, LV_EVENT_ALL, ui);
 
-                lv_obj_t* btn_minus = imgbtn_create(ui->index, &_minus_RGB565A8_50x50, "", 302, 239, 92, 92);
+                lv_obj_t *btn_minus = imgbtn_create(ui->index, &_minus_RGB565A8_50x50, "", 302, 239, 92, 92);
                 lv_obj_add_event_cb(btn_minus, minus_clicked, LV_EVENT_ALL, ui);
 
-                lv_obj_t* btn_timer = imgbtn_create(ui->index, &_timer_RGB565A8_50x50, "", 186, 356, 92, 92);
+                lv_obj_t *btn_timer = imgbtn_create(ui->index, &_timer_RGB565A8_50x50, "", 186, 356, 92, 92);
                 lv_obj_add_event_cb(btn_timer, timer_clicked, LV_EVENT_ALL, ui);
 
-                lv_obj_t* btn_weter= imgbtn_create(ui->index, &_water_RGB565A8_50x50, "", 302, 356, 92, 92);
+                lv_obj_t *btn_weter = imgbtn_create(ui->index, &_water_RGB565A8_50x50, "", 302, 356, 92, 92);
                 lv_obj_add_event_cb(btn_weter, water_clicked, LV_EVENT_ALL, ui);
 
-                lv_obj_t* btn_play = imgbtn_create(ui->index, &_play_RGB565A8_50x50, "", 15, 239, 146, 211);
+                lv_obj_t *btn_play = imgbtn_create(ui->index, &_play_RGB565A8_50x50, "", 15, 239, 146, 211);
                 lv_obj_add_event_cb(btn_play, index_to_preparing, LV_EVENT_ALL, ui);
 
                 lv_ui *ui = lv_event_get_user_data(e);
@@ -471,7 +596,7 @@ static void index_event_handler (lv_event_t *e)
                 lv_obj_set_style_shadow_ofs_y(ui->index_cont_clean, 3, 0);
                 lv_obj_set_style_shadow_color(ui->index_cont_clean, lv_color_hex(0x000000), 0);
                 lv_obj_set_style_shadow_opa(ui->index_cont_clean, LV_OPA_40, 0);
-                _is_index_page_initialized=true;
+                _is_index_page_initialized = true;
             }
 
         }
@@ -484,36 +609,45 @@ static void index_event_handler (lv_event_t *e)
     }
 }
 
-void events_init_index (lv_ui *ui)
+void events_init_index(lv_ui *ui)
 {
     lv_obj_add_event_cb(ui->index, index_event_handler, LV_EVENT_ALL, ui);
 }
 
-static void setting_event_handler (lv_event_t *e)
+static void setting_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_SCREEN_LOADED:
     {
         lv_ui *ui = lv_event_get_user_data(e);
-        if (ui != NULL) {
-            if(!_is_setting_page_initialized) {
-                lv_obj_t* btn_return = imgbtn_create(ui->setting, &_return_RGB565A8_100x100, "", 615, 274, 170, 187);
+        if (ui != NULL)
+        {
+            if (!_is_setting_page_initialized)
+            {
+                lv_obj_t *btn_return = imgbtn_create(ui->setting, &_return_RGB565A8_100x100, "", 615, 274, 170,
+                                                     187);
                 lv_obj_add_event_cb(btn_return, setting_back, LV_EVENT_ALL, ui);
 
-                lv_obj_t *btn_mode = imgbtn_create_without_bg(ui->setting_cont_1, &_mode_RGB565A8_100x100,"模式设置", 44, 91, 144, 144);
+                lv_obj_t *btn_mode = imgbtn_create_without_bg(ui->setting_cont_1, &_mode_RGB565A8_100x100,
+                                     "模式设置", 44, 91, 144, 144);
                 lv_obj_add_event_cb(btn_mode, setting_to_conf_mode, LV_EVENT_ALL, NULL);
 
-                lv_obj_t *btn_timer = imgbtn_create_without_bg(ui->setting_cont_1, &_timer_RGB565A8_100x100,"声光时钟", 229, 91, 144, 144);
+                lv_obj_t *btn_timer = imgbtn_create_without_bg(ui->setting_cont_1, &_timer_RGB565A8_100x100,
+                                      "声光时钟", 229, 91, 144, 144);
                 lv_obj_add_event_cb(btn_timer, setting_to_conf_other, LV_EVENT_ALL, NULL);
 
-                lv_obj_t *btn_wifi = imgbtn_create_without_bg(ui->setting_cont_1, &_wifi_RGB565A8_100x100,"wifi设置", 421, 91, 144, 144);
+                lv_obj_t *btn_wifi = imgbtn_create_without_bg(ui->setting_cont_1, &_wifi_RGB565A8_100x100,
+                                     "wifi设置", 421, 91, 144, 144);
                 lv_obj_add_event_cb(btn_wifi, setting_to_conf_wifi, LV_EVENT_ALL, NULL);
 
-                lv_obj_t *btn_location = imgbtn_create_without_bg(ui->setting_cont_1, &_location_RGB565A8_100x100,"定位设置", 44, 251, 144, 144);
+                lv_obj_t *btn_location = imgbtn_create_without_bg(ui->setting_cont_1, &_location_RGB565A8_100x100,
+                                         "定位设置", 44, 251, 144, 144);
                 lv_obj_add_event_cb(btn_location, setting_to_conf_location, LV_EVENT_ALL, NULL);
 
-                lv_obj_t *btn_advance = imgbtn_create_without_bg(ui->setting_cont_1, &_setting_RGB565A8_100x100,"高级设置", 229, 251, 144, 144);
+                lv_obj_t *btn_advance = imgbtn_create_without_bg(ui->setting_cont_1, &_setting_RGB565A8_100x100,
+                                        "高级设置", 229, 251, 144, 144);
                 lv_obj_add_event_cb(btn_advance, setting_to_conf_advance, LV_EVENT_ALL, NULL);
 
                 lv_obj_set_style_shadow_width(ui->setting_cont_1, 8, 0);
@@ -521,7 +655,7 @@ static void setting_event_handler (lv_event_t *e)
                 lv_obj_set_style_shadow_ofs_y(ui->setting_cont_1, 3, 0);
                 lv_obj_set_style_shadow_color(ui->setting_cont_1, lv_color_hex(0x000000), 0);
                 lv_obj_set_style_shadow_opa(ui->setting_cont_1, LV_OPA_40, 0);
-                _is_setting_page_initialized=true;
+                _is_setting_page_initialized = true;
             }
 
         }
@@ -532,13 +666,15 @@ static void setting_event_handler (lv_event_t *e)
     }
 }
 
-static void setting_btn_2_event_handler (lv_event_t *e)
+static void setting_btn_2_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_CLICKED:
     {
-        ui_load_scr_animation(&guider_ui, &guider_ui.conf_mode, guider_ui.conf_mode_del, &guider_ui.setting_del, setup_scr_conf_mode, LV_SCR_LOAD_ANIM_NONE, 200, 200, false, true);
+        ui_load_scr_animation(&guider_ui, &guider_ui.conf_mode, guider_ui.conf_mode_del,
+                              &guider_ui.setting_del, setup_scr_conf_mode, LV_SCR_LOAD_ANIM_NONE, 200, 200, false, true);
         break;
     }
     default:
@@ -546,13 +682,15 @@ static void setting_btn_2_event_handler (lv_event_t *e)
     }
 }
 
-static void setting_btn_3_event_handler (lv_event_t *e)
+static void setting_btn_3_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_CLICKED:
     {
-        ui_load_scr_animation(&guider_ui, &guider_ui.conf_other, guider_ui.conf_other_del, &guider_ui.setting_del, setup_scr_conf_other, LV_SCR_LOAD_ANIM_FADE_ON, 200, 200, true, true);
+        ui_load_scr_animation(&guider_ui, &guider_ui.conf_other, guider_ui.conf_other_del,
+                              &guider_ui.setting_del, setup_scr_conf_other, LV_SCR_LOAD_ANIM_FADE_ON, 200, 200, true, true);
         break;
     }
     default:
@@ -560,13 +698,15 @@ static void setting_btn_3_event_handler (lv_event_t *e)
     }
 }
 
-static void setting_btn_4_event_handler (lv_event_t *e)
+static void setting_btn_4_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_CLICKED:
     {
-        ui_load_scr_animation(&guider_ui, &guider_ui.conf_wifi, guider_ui.conf_wifi_del, &guider_ui.setting_del, setup_scr_conf_wifi, LV_SCR_LOAD_ANIM_FADE_ON, 200, 200, false, true);
+        ui_load_scr_animation(&guider_ui, &guider_ui.conf_wifi, guider_ui.conf_wifi_del,
+                              &guider_ui.setting_del, setup_scr_conf_wifi, LV_SCR_LOAD_ANIM_FADE_ON, 200, 200, false, true);
         break;
     }
     default:
@@ -574,13 +714,15 @@ static void setting_btn_4_event_handler (lv_event_t *e)
     }
 }
 
-static void setting_btn_5_event_handler (lv_event_t *e)
+static void setting_btn_5_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_CLICKED:
     {
-        ui_load_scr_animation(&guider_ui, &guider_ui.conf_location, guider_ui.conf_location_del, &guider_ui.setting_del, setup_scr_conf_location, LV_SCR_LOAD_ANIM_NONE, 200, 200, true, true);
+        ui_load_scr_animation(&guider_ui, &guider_ui.conf_location, guider_ui.conf_location_del,
+                              &guider_ui.setting_del, setup_scr_conf_location, LV_SCR_LOAD_ANIM_NONE, 200, 200, true, true);
         break;
     }
     default:
@@ -588,13 +730,15 @@ static void setting_btn_5_event_handler (lv_event_t *e)
     }
 }
 
-static void setting_btn_6_event_handler (lv_event_t *e)
+static void setting_btn_6_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_CLICKED:
     {
-        ui_load_scr_animation(&guider_ui, &guider_ui.conf_advance, guider_ui.conf_advance_del, &guider_ui.setting_del, setup_scr_conf_advance, LV_SCR_LOAD_ANIM_FADE_ON, 200, 200, false, true);
+        ui_load_scr_animation(&guider_ui, &guider_ui.conf_advance, guider_ui.conf_advance_del,
+                              &guider_ui.setting_del, setup_scr_conf_advance, LV_SCR_LOAD_ANIM_FADE_ON, 200, 200, false, true);
         break;
     }
     default:
@@ -602,7 +746,7 @@ static void setting_btn_6_event_handler (lv_event_t *e)
     }
 }
 
-void events_init_setting (lv_ui *ui)
+void events_init_setting(lv_ui *ui)
 {
     lv_obj_add_event_cb(ui->setting, setting_event_handler, LV_EVENT_ALL, ui);
     lv_obj_add_event_cb(ui->setting_btn_2, setting_btn_2_event_handler, LV_EVENT_ALL, ui);
@@ -612,16 +756,19 @@ void events_init_setting (lv_ui *ui)
     lv_obj_add_event_cb(ui->setting_btn_6, setting_btn_6_event_handler, LV_EVENT_ALL, ui);
 }
 
-static void preparing_event_handler (lv_event_t *e)
+static void preparing_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_SCREEN_LOADED:
     {
         lv_ui *ui = lv_event_get_user_data(e);
-        if (ui != NULL) {
+        if (ui != NULL)
+        {
             preparing_page_init(ui);
-            if(!_is_preparing_page_initialized) {
+            if (!_is_preparing_page_initialized)
+            {
                 lv_obj_set_style_shadow_width(ui->preparing_cont_1, 8, 0);
                 lv_obj_set_style_shadow_ofs_x(ui->preparing_cont_1, 3, 0);
                 lv_obj_set_style_shadow_ofs_y(ui->preparing_cont_1, 3, 0);
@@ -646,9 +793,10 @@ static void preparing_event_handler (lv_event_t *e)
                 lv_obj_set_style_shadow_color(ui->preparing_btn_no, lv_color_hex(0x000000), 0);
                 lv_obj_set_style_shadow_opa(ui->preparing_btn_no, LV_OPA_40, 0);
 
-                lv_obj_t* btn_stop = imgbtn_create(ui->preparing_cont_3, &_stop_RGB565A8_100x100, "停止", 0, 215, 170, 187);
+                lv_obj_t *btn_stop = imgbtn_create(ui->preparing_cont_3, &_stop_RGB565A8_100x100, "停止", 0, 215,
+                                                   170, 187);
                 lv_obj_add_event_cb(btn_stop, stop_toast, LV_EVENT_ALL, ui);
-                _is_preparing_page_initialized=true;
+                _is_preparing_page_initialized = true;
             }
         }
         lv_label_set_text(guider_ui.preparing_preparing_tips, "");
@@ -659,10 +807,11 @@ static void preparing_event_handler (lv_event_t *e)
     }
 }
 
-static void preparing_btn_no_event_handler (lv_event_t *e)
+static void preparing_btn_no_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_CLICKED:
     {
         lv_obj_add_flag(guider_ui.preparing_dialog1, LV_OBJ_FLAG_HIDDEN);
@@ -673,10 +822,11 @@ static void preparing_btn_no_event_handler (lv_event_t *e)
     }
 }
 
-static void preparing_btn_yes_event_handler (lv_event_t *e)
+static void preparing_btn_yes_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_CLICKED:
     {
         preparing_page_stop(e);
@@ -688,28 +838,31 @@ static void preparing_btn_yes_event_handler (lv_event_t *e)
     }
 }
 
-void events_init_preparing (lv_ui *ui)
+void events_init_preparing(lv_ui *ui)
 {
     lv_obj_add_event_cb(ui->preparing, preparing_event_handler, LV_EVENT_ALL, ui);
     lv_obj_add_event_cb(ui->preparing_btn_no, preparing_btn_no_event_handler, LV_EVENT_ALL, ui);
     lv_obj_add_event_cb(ui->preparing_btn_yes, preparing_btn_yes_event_handler, LV_EVENT_ALL, ui);
 }
 
-static void location_event_handler (lv_event_t *e)
+static void location_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_SCREEN_LOADED:
     {
         lv_ui *ui = lv_event_get_user_data(e);
-        if (ui != NULL) {
+        if (ui != NULL)
+        {
             custom_ui_init(ui);
-            if(!_is_location_page_initialized) {
+            if (!_is_location_page_initialized)
+            {
                 location_page_init(ui);
-                lv_obj_t* btn_play = imgbtn_create(ui->location, &_play_RGB565A8_70x70, "", 15, 239, 178, 222);
+                lv_obj_t *btn_play = imgbtn_create(ui->location, &_play_RGB565A8_70x70, "", 15, 239, 178, 222);
                 lv_obj_add_event_cb(btn_play, location_to_preparing, LV_EVENT_ALL, ui);
 
-                lv_obj_t* btn_return= imgbtn_create(ui->location, &_return_RGB565A8_70x70, "", 218, 239, 178, 222);
+                lv_obj_t *btn_return = imgbtn_create(ui->location, &_return_RGB565A8_70x70, "", 218, 239, 178, 222);
                 lv_obj_add_event_cb(btn_return, location_back, LV_EVENT_ALL, ui);
 
 
@@ -718,7 +871,7 @@ static void location_event_handler (lv_event_t *e)
                 lv_obj_set_style_shadow_ofs_y(ui->location_cont_1, 3, 0);
                 lv_obj_set_style_shadow_color(ui->location_cont_1, lv_color_hex(0x000000), 0);
                 lv_obj_set_style_shadow_opa(ui->location_cont_1, LV_OPA_40, 0);
-                _is_location_page_initialized=true;
+                _is_location_page_initialized = true;
             }
 
 
@@ -732,19 +885,21 @@ static void location_event_handler (lv_event_t *e)
     }
 }
 
-void events_init_location (lv_ui *ui)
+void events_init_location(lv_ui *ui)
 {
     lv_obj_add_event_cb(ui->location, location_event_handler, LV_EVENT_ALL, ui);
 }
 
-static void working_event_handler (lv_event_t *e)
+static void working_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_SCREEN_LOADED:
     {
         lv_ui *ui = lv_event_get_user_data(e);
-        if (ui != NULL) {
+        if (ui != NULL)
+        {
             custom_ui_init(ui);
             working_page_init(ui);
         }
@@ -757,10 +912,11 @@ static void working_event_handler (lv_event_t *e)
     }
 }
 
-static void working_btn_no_event_handler (lv_event_t *e)
+static void working_btn_no_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_CLICKED:
     {
         lv_obj_add_flag(guider_ui.working_dialog, LV_OBJ_FLAG_HIDDEN);
@@ -771,10 +927,11 @@ static void working_btn_no_event_handler (lv_event_t *e)
     }
 }
 
-static void working_btn_yes_event_handler (lv_event_t *e)
+static void working_btn_yes_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_CLICKED:
     {
         working_to_preparing_back(e);
@@ -785,31 +942,35 @@ static void working_btn_yes_event_handler (lv_event_t *e)
     }
 }
 
-void events_init_working (lv_ui *ui)
+void events_init_working(lv_ui *ui)
 {
     lv_obj_add_event_cb(ui->working, working_event_handler, LV_EVENT_ALL, ui);
     lv_obj_add_event_cb(ui->working_btn_no, working_btn_no_event_handler, LV_EVENT_ALL, ui);
     lv_obj_add_event_cb(ui->working_btn_yes, working_btn_yes_event_handler, LV_EVENT_ALL, ui);
 }
 
-static void conf_advance_event_handler (lv_event_t *e)
+static void conf_advance_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_SCREEN_LOADED:
     {
         lv_ui *ui = lv_event_get_user_data(e);
-        if (ui != NULL) {
+        if (ui != NULL)
+        {
             lv_obj_set_style_shadow_width(ui->conf_advance_cont_3, 8, 0);
             lv_obj_set_style_shadow_ofs_x(ui->conf_advance_cont_3, 3, 0);
             lv_obj_set_style_shadow_ofs_y(ui->conf_advance_cont_3, 3, 0);
             lv_obj_set_style_shadow_color(ui->conf_advance_cont_3, lv_color_hex(0x000000), 0);
             lv_obj_set_style_shadow_opa(ui->conf_advance_cont_3, LV_OPA_40, 0);
 
-            lv_obj_t* btn_home = imgbtn_create(ui->conf_advance, &_home_RGB565A8_100x100, "", 615, 62, 170, 187);
+            lv_obj_t *btn_home = imgbtn_create(ui->conf_advance, &_home_RGB565A8_100x100, "", 615, 62, 170,
+                                               187);
             lv_obj_add_event_cb(btn_home, conf_advance_to_index, LV_EVENT_ALL, ui);
 
-            lv_obj_t* btn_return = imgbtn_create(ui->conf_advance, &_return_RGB565A8_100x100, "", 615, 274, 170, 187);
+            lv_obj_t *btn_return = imgbtn_create(ui->conf_advance, &_return_RGB565A8_100x100, "", 615, 274, 170,
+                                                 187);
             lv_obj_add_event_cb(btn_return, conf_advance_to_setting, LV_EVENT_ALL, ui);
 
         }
@@ -820,23 +981,27 @@ static void conf_advance_event_handler (lv_event_t *e)
     }
 }
 
-void events_init_conf_advance (lv_ui *ui)
+void events_init_conf_advance(lv_ui *ui)
 {
     lv_obj_add_event_cb(ui->conf_advance, conf_advance_event_handler, LV_EVENT_ALL, ui);
 }
 
-static void conf_mode_event_handler (lv_event_t *e)
+static void conf_mode_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_SCREEN_LOADED:
     {
         lv_ui *ui = lv_event_get_user_data(e);
-        if (ui != NULL) {
+        if (ui != NULL)
+        {
             conf_mode_init_listall(ui);
-            if(!_is_conf_mode_page_initialized) {
-                lv_obj_t* btn_home = imgbtn_create(ui->conf_mode, &_home_RGB565A8_100x100, "", 615, 62, 170, 187);
-                lv_obj_t* btn_return = imgbtn_create(ui->conf_mode, &_return_RGB565A8_100x100, "", 615, 274, 170, 187);
+            if (!_is_conf_mode_page_initialized)
+            {
+                lv_obj_t *btn_home = imgbtn_create(ui->conf_mode, &_home_RGB565A8_100x100, "", 615, 62, 170, 187);
+                lv_obj_t *btn_return = imgbtn_create(ui->conf_mode, &_return_RGB565A8_100x100, "", 615, 274, 170,
+                                                     187);
                 lv_obj_add_event_cb(btn_home, conf_mode_to_index, LV_EVENT_ALL, ui);
                 lv_obj_add_event_cb(btn_return, conf_mode_to_setting, LV_EVENT_ALL, ui);
 
@@ -847,7 +1012,7 @@ static void conf_mode_event_handler (lv_event_t *e)
                 lv_obj_set_style_shadow_ofs_y(ui->conf_mode_cont_1, 3, 0);
                 lv_obj_set_style_shadow_color(ui->conf_mode_cont_1, lv_color_hex(0x000000), 0);
                 lv_obj_set_style_shadow_opa(ui->conf_mode_cont_1, LV_OPA_40, 0);
-                _is_conf_mode_page_initialized=true;
+                _is_conf_mode_page_initialized = true;
             }
 
         }
@@ -859,27 +1024,32 @@ static void conf_mode_event_handler (lv_event_t *e)
     }
 }
 
-void events_init_conf_mode (lv_ui *ui)
+void events_init_conf_mode(lv_ui *ui)
 {
     lv_obj_add_event_cb(ui->conf_mode, conf_mode_event_handler, LV_EVENT_ALL, ui);
 }
 
-static void conf_mode_detail_event_handler (lv_event_t *e)
+static void conf_mode_detail_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_SCREEN_LOADED:
     {
         lv_ui *ui = lv_event_get_user_data(e);
-        if (ui != NULL) {
+        if (ui != NULL)
+        {
             conf_mode_detail_init(ui);
-            if(!_is_conf_mode_detail_page_initialized) {
+            if (!_is_conf_mode_detail_page_initialized)
+            {
 
-                lv_obj_t* btn_home = imgbtn_create(ui->conf_mode_detail, &_home_RGB565A8_100x100, "主页", 615, 62, 170, 187);
-                lv_obj_t* btn_return = imgbtn_create(ui->conf_mode_detail, &_return_RGB565A8_100x100, "返回", 615, 274, 170, 187);
+                lv_obj_t *btn_home = imgbtn_create(ui->conf_mode_detail, &_home_RGB565A8_100x100, "主页", 615, 62,
+                                                   170, 187);
+                lv_obj_t *btn_return = imgbtn_create(ui->conf_mode_detail, &_return_RGB565A8_100x100, "返回", 615,
+                                                     274, 170, 187);
                 lv_obj_add_event_cb(btn_home, conf_mode_detail_to_index, LV_EVENT_ALL, ui);
                 lv_obj_add_event_cb(btn_return, conf_mode_detail_to_conf_mode, LV_EVENT_ALL, ui);
-                _is_conf_mode_detail_page_initialized=true;
+                _is_conf_mode_detail_page_initialized = true;
             }
 
 
@@ -897,10 +1067,11 @@ static void conf_mode_detail_event_handler (lv_event_t *e)
     }
 }
 
-static void conf_mode_detail_btn_resume_event_handler (lv_event_t *e)
+static void conf_mode_detail_btn_resume_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_CLICKED:
     {
         conf_mode_detail_restore_default_clicked(e);
@@ -911,10 +1082,11 @@ static void conf_mode_detail_btn_resume_event_handler (lv_event_t *e)
     }
 }
 
-static void conf_mode_detail_btn_save_event_handler (lv_event_t *e)
+static void conf_mode_detail_btn_save_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_CLICKED:
     {
         conf_mode_detail_save_clicked(e);
@@ -925,7 +1097,7 @@ static void conf_mode_detail_btn_save_event_handler (lv_event_t *e)
     }
 }
 
-static void conf_mode_detail_combo_event_handler (lv_event_t *e)
+static void conf_mode_detail_combo_event_handler(lv_event_t *e)
 {
     lv_ui *ui;
     lv_obj_t *dropdown;
@@ -933,37 +1105,50 @@ static void conf_mode_detail_combo_event_handler (lv_event_t *e)
     const char *options = NULL;
     uint16_t option_count = 0;
 
-    if (lv_event_get_code(e) != LV_EVENT_CLICKED) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED)
+    {
         return;
     }
 
     ui = (lv_ui *)lv_event_get_user_data(e);
     dropdown = lv_event_get_target(e);
-    if (ui == NULL || dropdown == NULL || !lv_obj_is_valid(dropdown)) {
+    if (ui == NULL || dropdown == NULL || !lv_obj_is_valid(dropdown))
+    {
         return;
     }
 
-    if (dropdown == ui->conf_mode_detail_combo_temperature) {
+    if (dropdown == ui->conf_mode_detail_combo_temperature)
+    {
         title_text = "温度设置";
         options = "35℃\n36℃\n37℃\n38℃\n39℃\n40℃\n41℃\n42℃\n43℃\n44℃\n45℃\n46℃\n47℃\n48℃";
         option_count = 14;
-    } else if (dropdown == ui->conf_mode_detail_combo_timer) {
+    }
+    else if (dropdown == ui->conf_mode_detail_combo_timer)
+    {
         title_text = "足浴时间";
         options = "10min\n15min\n20min\n25min\n30min";
         option_count = 5;
-    } else if (dropdown == ui->conf_mode_detail_combo_water_level) {
+    }
+    else if (dropdown == ui->conf_mode_detail_combo_water_level)
+    {
         title_text = "水位设置";
         options = "1档\n2档\n3档";
         option_count = 3;
-    } else if (dropdown == ui->conf_mode_detail_combo_medicinal) {
+    }
+    else if (dropdown == ui->conf_mode_detail_combo_medicinal)
+    {
         title_text = "药液设置";
         options = "无\n药液1\n药液2\n药液1+药液2";
         option_count = 4;
-    } else if (dropdown == ui->conf_mode_detail_combo_location) {
+    }
+    else if (dropdown == ui->conf_mode_detail_combo_location)
+    {
         title_text = "定位设置";
         options = "客厅\n书房\n主卧\n小孩房";
         option_count = 4;
-    } else {
+    }
+    else
+    {
         return;
     }
 
@@ -971,10 +1156,11 @@ static void conf_mode_detail_combo_event_handler (lv_event_t *e)
     mode_option_dialog_show(ui, dropdown, title_text, options, option_count);
 }
 
-static void conf_mode_detail_btn_delete_event_handler (lv_event_t *e)
+static void conf_mode_detail_btn_delete_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_CLICKED:
     {
         conf_mode_detail_delete_clicked(e);
@@ -985,33 +1171,46 @@ static void conf_mode_detail_btn_delete_event_handler (lv_event_t *e)
     }
 }
 
-void events_init_conf_mode_detail (lv_ui *ui)
+void events_init_conf_mode_detail(lv_ui *ui)
 {
     lv_obj_add_event_cb(ui->conf_mode_detail, conf_mode_detail_event_handler, LV_EVENT_ALL, ui);
-    lv_obj_add_event_cb(ui->conf_mode_detail_btn_resume, conf_mode_detail_btn_resume_event_handler, LV_EVENT_ALL, ui);
-    lv_obj_add_event_cb(ui->conf_mode_detail_btn_save, conf_mode_detail_btn_save_event_handler, LV_EVENT_ALL, ui);
-    lv_obj_add_event_cb(ui->conf_mode_detail_combo_temperature, conf_mode_detail_combo_event_handler, LV_EVENT_ALL, ui);
-    lv_obj_add_event_cb(ui->conf_mode_detail_combo_timer, conf_mode_detail_combo_event_handler, LV_EVENT_ALL, ui);
-    lv_obj_add_event_cb(ui->conf_mode_detail_combo_water_level, conf_mode_detail_combo_event_handler, LV_EVENT_ALL, ui);
-    lv_obj_add_event_cb(ui->conf_mode_detail_combo_medicinal, conf_mode_detail_combo_event_handler, LV_EVENT_ALL, ui);
-    lv_obj_add_event_cb(ui->conf_mode_detail_combo_location, conf_mode_detail_combo_event_handler, LV_EVENT_ALL, ui);
-    lv_obj_add_event_cb(ui->conf_mode_detail_btn_delete, conf_mode_detail_btn_delete_event_handler, LV_EVENT_ALL, ui);
+    lv_obj_add_event_cb(ui->conf_mode_detail_btn_resume, conf_mode_detail_btn_resume_event_handler,
+                        LV_EVENT_ALL, ui);
+    lv_obj_add_event_cb(ui->conf_mode_detail_btn_save, conf_mode_detail_btn_save_event_handler,
+                        LV_EVENT_ALL, ui);
+    lv_obj_add_event_cb(ui->conf_mode_detail_combo_temperature, conf_mode_detail_combo_event_handler,
+                        LV_EVENT_ALL, ui);
+    lv_obj_add_event_cb(ui->conf_mode_detail_combo_timer, conf_mode_detail_combo_event_handler,
+                        LV_EVENT_ALL, ui);
+    lv_obj_add_event_cb(ui->conf_mode_detail_combo_water_level, conf_mode_detail_combo_event_handler,
+                        LV_EVENT_ALL, ui);
+    lv_obj_add_event_cb(ui->conf_mode_detail_combo_medicinal, conf_mode_detail_combo_event_handler,
+                        LV_EVENT_ALL, ui);
+    lv_obj_add_event_cb(ui->conf_mode_detail_combo_location, conf_mode_detail_combo_event_handler,
+                        LV_EVENT_ALL, ui);
+    lv_obj_add_event_cb(ui->conf_mode_detail_btn_delete, conf_mode_detail_btn_delete_event_handler,
+                        LV_EVENT_ALL, ui);
 }
 
-static void conf_wifi_event_handler (lv_event_t *e)
+static void conf_wifi_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_SCREEN_LOADED:
     {
         lv_ui *ui = lv_event_get_user_data(e);
-        if (ui != NULL) {
-            lv_obj_t* btn_home = imgbtn_create(ui->conf_wifi, &_home_RGB565A8_100x100, "", 615, 62, 170, 187);
-            lv_obj_t* btn_return = imgbtn_create(ui->conf_wifi, &_return_RGB565A8_100x100, "", 615, 274, 170, 187);
+        if (ui != NULL)
+        {
+            lv_obj_t *btn_home = imgbtn_create(ui->conf_wifi, &_home_RGB565A8_100x100, "", 615, 62, 170, 187);
+            lv_obj_t *btn_return = imgbtn_create(ui->conf_wifi, &_return_RGB565A8_100x100, "", 615, 274, 170,
+                                                 187);
             lv_obj_add_event_cb(btn_home, conf_wifi_to_index, LV_EVENT_ALL, ui);
             lv_obj_add_event_cb(btn_return, conf_wifi_to_setting, LV_EVENT_ALL, ui);
             conf_wifi_set_connect_button_running(ui, conf_wifi_connect_is_running());
-            if (!conf_wifi_connect_is_running()) {
+            conf_wifi_start_ip_timer(ui);
+            if (!conf_wifi_connect_is_running())
+            {
                 conf_wifi_schedule_scan(ui);
             }
         }
@@ -1020,7 +1219,14 @@ static void conf_wifi_event_handler (lv_event_t *e)
     case LV_EVENT_SCREEN_UNLOAD_START:
     {
         conf_wifi_cancel_scan_timer();
+        conf_wifi_stop_ip_timer(lv_event_get_target(e));
         keyboard_manager_hide();
+        break;
+    }
+    case LV_EVENT_DELETE:
+    {
+        conf_wifi_cancel_scan_timer();
+        conf_wifi_stop_ip_timer(lv_event_get_target(e));
         break;
     }
     default:
@@ -1028,17 +1234,19 @@ static void conf_wifi_event_handler (lv_event_t *e)
     }
 }
 
-static void conf_wifi_btn_2_event_handler (lv_event_t *e)
+static void conf_wifi_btn_2_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_CLICKED:
     {
         lv_ui *ui = lv_event_get_user_data(e);
         char ssid[128] = {0};
         const char *psk;
 
-        if (ui == NULL || ui->conf_wifi_wifi_ssid == NULL || ui->conf_wifi_wifi_pwd == NULL) {
+        if (ui == NULL || ui->conf_wifi_wifi_ssid == NULL || ui->conf_wifi_wifi_pwd == NULL)
+        {
             printf("wifi ui control is not ready\n");
             break;
         }
@@ -1046,7 +1254,8 @@ static void conf_wifi_btn_2_event_handler (lv_event_t *e)
         lv_dropdown_get_selected_str(ui->conf_wifi_wifi_ssid, ssid, sizeof(ssid));
         psk = lv_textarea_get_text(ui->conf_wifi_wifi_pwd);
 
-        if (conf_wifi_connect_start(ui, ssid, psk) != 0) {
+        if (conf_wifi_connect_start(ui, ssid, psk) != 0)
+        {
             printf("start wifi connection failed\n");
         }
         break;
@@ -1056,30 +1265,33 @@ static void conf_wifi_btn_2_event_handler (lv_event_t *e)
     }
 }
 
-void events_init_conf_wifi (lv_ui *ui)
+void events_init_conf_wifi(lv_ui *ui)
 {
     lv_obj_add_event_cb(ui->conf_wifi, conf_wifi_event_handler, LV_EVENT_ALL, ui);
     lv_obj_add_event_cb(ui->conf_wifi_btn_2, conf_wifi_btn_2_event_handler, LV_EVENT_ALL, ui);
 }
 
-static void conf_other_event_handler (lv_event_t *e)
+static void conf_other_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_SCREEN_LOADED:
     {
         lv_ui *ui = lv_event_get_user_data(e);
-        if (ui != NULL) {
+        if (ui != NULL)
+        {
             lv_obj_set_style_shadow_width(ui->conf_other_cont_1, 8, 0);
             lv_obj_set_style_shadow_ofs_x(ui->conf_other_cont_1, 3, 0);
             lv_obj_set_style_shadow_ofs_y(ui->conf_other_cont_1, 3, 0);
             lv_obj_set_style_shadow_color(ui->conf_other_cont_1, lv_color_hex(0x000000), 0);
             lv_obj_set_style_shadow_opa(ui->conf_other_cont_1, LV_OPA_40, 0);
 
-            lv_obj_t* btn_home = imgbtn_create(ui->conf_other, &_home_RGB565A8_100x100, "", 615, 62, 170, 187);
+            lv_obj_t *btn_home = imgbtn_create(ui->conf_other, &_home_RGB565A8_100x100, "", 615, 62, 170, 187);
             lv_obj_add_event_cb(btn_home, conf_other_to_index, LV_EVENT_ALL, ui);
 
-            lv_obj_t* btn_return = imgbtn_create(ui->conf_other, &_return_RGB565A8_100x100, "", 615, 274, 170, 187);
+            lv_obj_t *btn_return = imgbtn_create(ui->conf_other, &_return_RGB565A8_100x100, "", 615, 274, 170,
+                                                 187);
             lv_obj_add_event_cb(btn_return, conf_other_to_setting, LV_EVENT_ALL, ui);
 
         }
@@ -1090,34 +1302,39 @@ static void conf_other_event_handler (lv_event_t *e)
     }
 }
 
-void events_init_conf_other (lv_ui *ui)
+void events_init_conf_other(lv_ui *ui)
 {
     lv_obj_add_event_cb(ui->conf_other, conf_other_event_handler, LV_EVENT_ALL, ui);
 }
 
-static void conf_location_event_handler (lv_event_t *e)
+static void conf_location_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_SCREEN_LOADED:
     {
         lv_ui *ui = lv_event_get_user_data(e);
-        if (ui != NULL) {
-            if(!_is_conf_location_page_initialized) {
+        if (ui != NULL)
+        {
+            if (!_is_conf_location_page_initialized)
+            {
                 lv_obj_set_style_shadow_width(ui->conf_location_cont_1, 8, 0);
                 lv_obj_set_style_shadow_ofs_x(ui->conf_location_cont_1, 3, 0);
                 lv_obj_set_style_shadow_ofs_y(ui->conf_location_cont_1, 3, 0);
                 lv_obj_set_style_shadow_color(ui->conf_location_cont_1, lv_color_hex(0x000000), 0);
                 lv_obj_set_style_shadow_opa(ui->conf_location_cont_1, LV_OPA_40, 0);
 
-                lv_obj_t* btn_home = imgbtn_create(ui->conf_location, &_home_RGB565A8_100x100, "", 615, 62, 170, 187);
+                lv_obj_t *btn_home = imgbtn_create(ui->conf_location, &_home_RGB565A8_100x100, "", 615, 62, 170,
+                                                   187);
                 lv_obj_add_event_cb(btn_home, conf_location_to_index, LV_EVENT_ALL, ui);
 
-                lv_obj_t* btn_return = imgbtn_create(ui->conf_location, &_return_RGB565A8_100x100, "", 615, 274, 170, 187);
+                lv_obj_t *btn_return = imgbtn_create(ui->conf_location, &_return_RGB565A8_100x100, "", 615, 274,
+                                                     170, 187);
                 lv_obj_add_event_cb(btn_return, conf_location_to_setting, LV_EVENT_ALL, ui);
 
                 conf_location_init(ui);
-                _is_conf_location_page_initialized=true;
+                _is_conf_location_page_initialized = true;
             }
 
         }
@@ -1133,10 +1350,11 @@ static void conf_location_event_handler (lv_event_t *e)
     }
 }
 
-static void conf_location_btn_save_event_handler (lv_event_t *e)
+static void conf_location_btn_save_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_CLICKED:
     {
         system_location_save();
@@ -1147,75 +1365,20 @@ static void conf_location_btn_save_event_handler (lv_event_t *e)
     }
 }
 
-static void conf_location_btn_create_map_event_handler (lv_event_t *e)
+static void conf_location_btn_create_map_event_handler(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
-    switch (code) {
+    switch (code)
+    {
     case LV_EVENT_CLICKED:
     {
         lv_ui *ui = (lv_ui *)lv_event_get_user_data(e);
-        MapStations_t out_stations = {0};
-
-        printf("Requesting robot station list...\n");
-        int res = RobotTcp_GetStationList(&out_stations);
-
-        if (res == 0 && out_stations.stations != NULL && out_stations.station_count > 0) {
-            printf("Map: %s\n", out_stations.map_name);
-            printf("Station count: %d\n", out_stations.station_count);
-
-            // Clear current location list, repopulate from robot station data
-            memset(g_location_settings, 0, sizeof(g_location_settings));
-            g_location_count = 0;
-
-            int count = out_stations.station_count;
-            if (count > SYSTEM_LOCATION_MAX_COUNT) {
-                count = SYSTEM_LOCATION_MAX_COUNT;
-            }
-
-            for (int i = 0; i < count; i++) {
-                StationInfo_t *station = &(out_stations.stations[i]);
-                system_location_t *location = &g_location_settings[i];
-
-                snprintf(location->name, sizeof(location->name), "%s", station->name);
-                location->index = station->id;
-                location->default_mode_index = 0;
-                location->coord.x = (lv_coord_t)(station->x * 10.0f);
-                location->coord.y = (lv_coord_t)(station->y * 10.0f);
-
-                printf("[%d] id=%d, name='%s', pos=(%.2f,%.2f,%.2f), type=%d, enable=%d\n",
-                       i, station->id, station->name,
-                       station->x, station->y, station->z,
-                       station->type, station->is_enable);
-
-                g_location_count++;
-            }
-
-            RobotTcp_FreeStationList(&out_stations);
-
-            // Persist new location list
-            system_location_save();
-
-            // Refresh conf_location page UI
-            if (ui != NULL) {
-                conf_location_init(ui);
-            }
+        /* 新协议不使用 t=80；机器人坐标只接受 App 单站点下发。 */
+        printf("站点坐标由 App 下发，本机不再从底盘导入站点列表\n");
+        if (ui != NULL)
+        {
+            conf_location_init(ui);
         }
-        // else {
-        //     printf("Failed to get station list (res=%d)\n", res);
-
-        //     // Show error dialog
-        //     if (ui != NULL) {
-        //         lv_obj_t *msgbox = lv_msgbox_create(NULL);
-        //         lv_msgbox_add_title(msgbox, "error");
-        //         lv_msgbox_add_text(msgbox, "Failed to get station list, please check network connection");
-        //         lv_obj_t *btn_ok = lv_msgbox_add_footer_button(msgbox, "OK");
-        //         lv_obj_add_event_cb(btn_ok, [](lv_event_t *ev) {
-        //             lv_obj_t *target = lv_event_get_target(ev);
-        //             lv_msgbox_close(lv_obj_get_parent(target));
-        //         }, LV_EVENT_CLICKED, NULL);
-        //         lv_obj_center(msgbox);
-        //     }
-        // }
         break;
     }
     default:
@@ -1223,9 +1386,11 @@ static void conf_location_btn_create_map_event_handler (lv_event_t *e)
     }
 }
 
-void events_init_conf_location (lv_ui *ui)
+void events_init_conf_location(lv_ui *ui)
 {
     lv_obj_add_event_cb(ui->conf_location, conf_location_event_handler, LV_EVENT_ALL, ui);
-    lv_obj_add_event_cb(ui->conf_location_btn_save, conf_location_btn_save_event_handler, LV_EVENT_ALL, ui);
-    lv_obj_add_event_cb(ui->conf_location_btn_create_map, conf_location_btn_create_map_event_handler, LV_EVENT_ALL, ui);
+    lv_obj_add_event_cb(ui->conf_location_btn_save, conf_location_btn_save_event_handler, LV_EVENT_ALL,
+                        ui);
+    lv_obj_add_event_cb(ui->conf_location_btn_create_map, conf_location_btn_create_map_event_handler,
+                        LV_EVENT_ALL, ui);
 }

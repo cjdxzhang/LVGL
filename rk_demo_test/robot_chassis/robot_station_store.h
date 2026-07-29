@@ -9,7 +9,8 @@
 
 #define ROBOT_STATION_MAX_COUNT 32U
 
-typedef struct {
+typedef struct
+{
     char name[64];
     double x;
     double y;
@@ -17,7 +18,8 @@ typedef struct {
     bool is_charging_base;
 } robot_station_t;
 
-typedef struct {
+typedef struct
+{
     pthread_mutex_t mutex;
     robot_station_t stations[ROBOT_STATION_MAX_COUNT];
     size_t count;
@@ -26,7 +28,8 @@ typedef struct {
     int test_io_failure_point;
 } robot_station_store_t;
 
-typedef enum {
+typedef enum
+{
     ROBOT_STATION_TEST_IO_NONE = 0,
     ROBOT_STATION_TEST_IO_WRITE,
     ROBOT_STATION_TEST_IO_FLUSH,
@@ -38,21 +41,14 @@ typedef enum {
 /* 调用方必须保证 init/deinit 不与其他接口并发。 */
 int robot_station_store_init(robot_station_store_t *store, const char *path);
 void robot_station_store_deinit(robot_station_store_t *store);
-int robot_station_store_upsert(robot_station_store_t *store,
-                               const robot_station_t *station);
 int robot_station_store_load(robot_station_store_t *store);
 int robot_station_store_update(robot_station_store_t *store,
                                const robot_station_t *station);
 size_t robot_station_store_count(const robot_station_store_t *store);
-size_t robot_station_store_count_charging_bases(const robot_station_store_t *store);
 int robot_station_store_find_by_name(const robot_station_store_t *store,
                                      const char *name,
                                      robot_station_t *station);
 int robot_station_store_get_charging_base(const robot_station_store_t *store,
-                                          robot_station_t *station);
-
-/* 仅供故障路径单元测试使用；生产代码不得设置故障点。 */
-void robot_station_store_set_test_io_failure(
-    robot_station_store_t *store, robot_station_test_io_failure_t failure);
+        robot_station_t *station);
 
 #endif

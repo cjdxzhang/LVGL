@@ -6,7 +6,6 @@ GEN_CSRCS += status_bar.c
 GEN_CSRCS += wifi_manager.c
 GEN_CSRCS += system_manager.c
 GEN_CSRCS += custom_imgbtn.c
-GEN_CSRCS += robot_tcp.c
 
 DEPPATH += --dep-path $(PRJ_DIR)/custom
 VPATH += :$(PRJ_DIR)/custom
