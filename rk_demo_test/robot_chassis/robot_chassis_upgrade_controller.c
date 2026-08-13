@@ -9,8 +9,9 @@ static int emit_current(robot_chassis_upgrade_controller_t *controller)
     int result;
 
     result = robot_chassis_upgrade_build_next(&controller->transfer, &command);
-    if (result == ROBOT_CHASSIS_OK) {
-        result = controller->emit(&command, controller->user_data);
+    if (result == ROBOT_CHASSIS_OK)
+    {
+        result = controller->emit(&command);
     }
     robot_chassis_command_release(&command);
     return result;
@@ -19,24 +20,24 @@ static int emit_current(robot_chassis_upgrade_controller_t *controller)
 static void finish(robot_chassis_upgrade_controller_t *controller, int result)
 {
     controller->active = false;
-    if (controller->result != NULL) {
-        controller->result(result, controller->user_data);
+    if (controller->result != NULL)
+    {
+        controller->result(result);
     }
 }
 
 void robot_chassis_upgrade_controller_init(
     robot_chassis_upgrade_controller_t *controller,
     robot_chassis_upgrade_emit_t emit,
-    robot_chassis_upgrade_result_t result,
-    void *user_data)
+    robot_chassis_upgrade_result_t result)
 {
-    if (controller == NULL) {
+    if (controller == NULL)
+    {
         return;
     }
     memset(controller, 0, sizeof(*controller));
     controller->emit = emit;
     controller->result = result;
-    controller->user_data = user_data;
 }
 
 int robot_chassis_upgrade_controller_start(
@@ -44,19 +45,23 @@ int robot_chassis_upgrade_controller_start(
 {
     int result;
 
-    if (controller == NULL || controller->emit == NULL || file_path == NULL) {
+    if (controller == NULL || controller->emit == NULL || file_path == NULL)
+    {
         return ROBOT_CHASSIS_ERR_INVALID_ARG;
     }
-    if (controller->active) {
+    if (controller->active)
+    {
         return ROBOT_CHASSIS_ERR_BUSY;
     }
     result = robot_chassis_upgrade_begin(&controller->transfer, file_path);
-    if (result != ROBOT_CHASSIS_OK) {
+    if (result != ROBOT_CHASSIS_OK)
+    {
         return result;
     }
     controller->active = true;
     result = emit_current(controller);
-    if (result != ROBOT_CHASSIS_OK) {
+    if (result != ROBOT_CHASSIS_OK)
+    {
         robot_chassis_upgrade_abort(&controller->transfer);
         controller->active = false;
     }
@@ -70,20 +75,24 @@ int robot_chassis_upgrade_controller_accept(
     int result;
     int emit_result;
 
-    if (controller == NULL || !controller->active) {
+    if (controller == NULL || !controller->active)
+    {
         return ROBOT_CHASSIS_ERR_STATE;
     }
     result = robot_chassis_upgrade_accept_response(&controller->transfer,
-                                                    json, length);
+             json, length);
     if (result == ROBOT_CHASSIS_OK &&
-        controller->transfer.kind == ROBOT_CHASSIS_TRANSFER_NONE) {
+            controller->transfer.kind == ROBOT_CHASSIS_TRANSFER_NONE)
+    {
         finish(controller, ROBOT_CHASSIS_OK);
         return ROBOT_CHASSIS_OK;
     }
     if (result == ROBOT_CHASSIS_OK ||
-        result == ROBOT_CHASSIS_ERR_WOULD_BLOCK) {
+            result == ROBOT_CHASSIS_ERR_WOULD_BLOCK)
+    {
         emit_result = emit_current(controller);
-        if (emit_result == ROBOT_CHASSIS_OK) {
+        if (emit_result == ROBOT_CHASSIS_OK)
+        {
             return result;
         }
         robot_chassis_upgrade_controller_abort(controller, emit_result);
@@ -99,13 +108,16 @@ int robot_chassis_upgrade_controller_timeout(
     int result;
     int emit_result;
 
-    if (controller == NULL || !controller->active) {
+    if (controller == NULL || !controller->active)
+    {
         return ROBOT_CHASSIS_ERR_STATE;
     }
     result = robot_chassis_upgrade_timeout(&controller->transfer);
-    if (result == ROBOT_CHASSIS_ERR_WOULD_BLOCK) {
+    if (result == ROBOT_CHASSIS_ERR_WOULD_BLOCK)
+    {
         emit_result = emit_current(controller);
-        if (emit_result == ROBOT_CHASSIS_OK) {
+        if (emit_result == ROBOT_CHASSIS_OK)
+        {
             return result;
         }
         robot_chassis_upgrade_controller_abort(controller, emit_result);
@@ -120,24 +132,28 @@ void robot_chassis_upgrade_controller_abort(
 {
     bool was_active;
 
-    if (controller == NULL) {
+    if (controller == NULL)
+    {
         return;
     }
     was_active = controller->active;
     robot_chassis_upgrade_abort(&controller->transfer);
     controller->active = false;
-    if (was_active && controller->result != NULL) {
-        controller->result(result, controller->user_data);
+    if (was_active && controller->result != NULL)
+    {
+        controller->result(result);
     }
 }
 
 int robot_chassis_upgrade_controller_expected_t(
     const robot_chassis_upgrade_controller_t *controller)
 {
-    if (controller == NULL || !controller->active) {
+    if (controller == NULL || !controller->active)
+    {
         return 0;
     }
-    switch (controller->transfer.stage) {
+    switch (controller->transfer.stage)
+    {
     case ROBOT_CHASSIS_UPGRADE_WAIT_BEGIN:
         return ROBOT_CHASSIS_T_UPGRADE_BEGIN;
     case ROBOT_CHASSIS_UPGRADE_WAIT_CHUNK:

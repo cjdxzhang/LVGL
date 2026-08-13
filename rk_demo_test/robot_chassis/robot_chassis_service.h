@@ -6,16 +6,16 @@
 #include "robot_chassis_types.h"
 
 typedef void (*robot_chassis_connection_callback_t)(
-    const robot_chassis_connection_state_t *state, void *user_data);
-typedef void (*robot_chassis_status_callback_t)(const robot_chassis_status_t *status,
-                                                void *user_data);
-typedef void (*robot_chassis_response_callback_t)(int t, int result, void *user_data);
-typedef void (*robot_chassis_grid_callback_t)(const robot_chassis_grid_t *grid, void *user_data);
-typedef void (*robot_chassis_map_list_callback_t)(const robot_chassis_map_list_t *map_list, void *user_data);
-typedef void (*robot_chassis_backup_callback_t)(int result, const char *final_path, void *user_data);
-typedef void (*robot_chassis_upgrade_callback_t)(int result, void *user_data);
+    const robot_chassis_connection_state_t *state);
+typedef void (*robot_chassis_status_callback_t)(const robot_chassis_status_t *status);
+typedef void (*robot_chassis_response_callback_t)(int t, int result);
+typedef void (*robot_chassis_grid_callback_t)(const robot_chassis_grid_t *grid);
+typedef void (*robot_chassis_map_list_callback_t)(const robot_chassis_map_list_t *map_list);
+typedef void (*robot_chassis_backup_callback_t)(int result, const char *final_path);
+typedef void (*robot_chassis_upgrade_callback_t)(int result);
 
-typedef struct {
+typedef struct
+{
     const char *host;
     uint16_t port;
     robot_chassis_connection_callback_t connection_callback;
@@ -26,7 +26,6 @@ typedef struct {
     robot_chassis_backup_callback_t backup_callback;
     robot_chassis_upgrade_callback_t upgrade_callback;
     size_t max_map_cells;
-    void *user_data;
 } robot_chassis_service_config_t;
 
 int robot_chassis_service_init(const robot_chassis_service_config_t *config);
@@ -41,4 +40,3 @@ int robot_chassis_service_backup_map(const char *map_name, const char *temporary
 int robot_chassis_service_upgrade(const char *file_path);
 
 #endif
-

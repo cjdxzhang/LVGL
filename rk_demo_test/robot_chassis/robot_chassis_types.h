@@ -40,9 +40,11 @@ typedef enum {
     ROBOT_CHASSIS_ERR_LIMIT = -16,
     ROBOT_CHASSIS_ERR_STATE = -17,
     ROBOT_CHASSIS_ERR_CANCELLED = -18
-} robot_chassis_error_t;
+}
+robot_chassis_error_t;
 
-typedef enum {
+typedef enum
+{
     ROBOT_CHASSIS_T_MANUAL_MOVE = 12,
     ROBOT_CHASSIS_T_GOTO_POINT = 13,
     ROBOT_CHASSIS_T_START_CHARGE = 20,
@@ -69,12 +71,15 @@ typedef enum {
     ROBOT_CHASSIS_T_WHEEL_ENABLE = 10003
 } robot_chassis_t_command_t;
 
-typedef enum {
-    ROBOT_CHASSIS_CMD_HEARTBEAT = 0,
+typedef enum
+{
+    ROBOT_CHASSIS_CMD_NONE = 0,
+    ROBOT_CHASSIS_CMD_HEARTBEAT,
     ROBOT_CHASSIS_CMD_REBOOT
 } robot_chassis_special_command_t;
 
-typedef enum {
+typedef enum
+{
     ROBOT_CHASSIS_ROUTE_UNKNOWN = 0,
     ROBOT_CHASSIS_ROUTE_HEARTBEAT,
     ROBOT_CHASSIS_ROUTE_REBOOT,
@@ -86,30 +91,33 @@ typedef enum {
     ROBOT_CHASSIS_ROUTE_GENERIC
 } robot_chassis_route_t;
 
-typedef enum {
+typedef enum
+{
     ROBOT_CHASSIS_TRANSFER_NONE = 0,
     ROBOT_CHASSIS_TRANSFER_MAP_BACKUP,
     ROBOT_CHASSIS_TRANSFER_UPGRADE
 } robot_chassis_transfer_kind_t;
 
-typedef struct {
+typedef struct
+{
     float x;
     float y;
     float z;
 } robot_chassis_pose_t;
 
-typedef struct {
+typedef struct
+{
     bool tcp_connected;
     bool heartbeat_alive;
     uint8_t heartbeat_misses;
 } robot_chassis_connection_state_t;
 
-typedef struct {
+typedef struct
+{
     char *data;
     size_t length;
     int response_t;
     robot_chassis_special_command_t special_command;
-    bool uses_special_command;
     bool dangerous;
 } robot_chassis_command_t;
 
@@ -118,4 +126,3 @@ typedef struct {
 #endif
 
 #endif
-

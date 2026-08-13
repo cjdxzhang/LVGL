@@ -11,7 +11,7 @@
 #define STATUS_BAR_LOG_ERROR(...) APP_LOG_ERROR("STATUS_BAR", __VA_ARGS__)
 
 // 静态变量，保存状态栏上的控件对象
-static lv_obj_t *status_container = NULL;
+static lv_obj_t *status_container = NULL; //顶部状态栏对象指针
 static lv_obj_t *wifi_label = NULL;
 static lv_obj_t *link_label = NULL;
 static lv_obj_t *sound_label = NULL;
@@ -53,12 +53,12 @@ static void time_update_timer_cb(lv_timer_t *timer)
     (void)timer;
     status_bar_update_time();
 
-    if (app_manager_robot_get_status(&status) == ROBOT_CHASSIS_OK &&
-            (status.valid_fields &
-             ROBOT_CHASSIS_STATUS_VALID_BATTERY_PERCENT) != 0U)
-    {
-        status_bar_update_battery((int)status.battery_percent);
-    }
+    // if (app_manager_robot_get_status(&status) == ROBOT_CHASSIS_OK &&
+    //         (status.valid_fields &
+    //          ROBOT_CHASSIS_STATUS_VALID_BATTERY_PERCENT) != 0U)
+    // {
+    //     status_bar_update_battery((int)status.battery_percent);
+    // }
 }
 
 lv_obj_t *status_bar_create(lv_ui *ui)

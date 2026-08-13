@@ -6,10 +6,13 @@
 #include "robot_chassis/robot_chassis_service.h"
 #include "robot_chassis/robot_station_app.h"
 #include "robot_chassis/robot_station_navigation.h"
+#include "robot_gateway_ipc.h"
 #include "serial.h"
 #include "app_log.h"
+#include "voice_command_service.h"
 
 #include <errno.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -21,6 +24,8 @@
 #include <pthread.h>
 
 #define APP_ROBOT_STATION_PATH "/mnt/udisk/stations.json"
+#define APP_ROBOT_MAP_NAME_SIZE 128U
+#define APP_ROBOT_BACKUP_PATH_SIZE 256U
 
 #define APP_MANAGER_LOG_USER(...) APP_LOG_USER("APP_MANAGER", __VA_ARGS__)
 #define APP_MANAGER_LOG_WARN(...) APP_LOG_WARN("APP_MANAGER", __VA_ARGS__)
@@ -38,9 +43,8 @@ static pthread_mutex_t g_robot_state_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_robot_access_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void app_manager_robot_status_callback(
-    const robot_chassis_status_t *status, void *user_data)
+    const robot_chassis_status_t *status)
 {
-    (void)user_data;
     if (status == NULL)
     {
         return;
@@ -239,7 +243,13 @@ void app_manager_init(lv_ui *ui)
     // 4. 初始化串口协议模块（打开串口并启动后台收发）
     serial_init();
 
-    // 5. 加载 App 站点数据并启动唯一的底盘服务线程
+    // 5. 启动 ASRPRO ttyS1 语音命令和固定语音播放服务
+    if (voice_command_service_init() != 0)
+    {
+        APP_MANAGER_LOG_ERROR("ASRPRO语音服务初始化失败，其他业务继续运行");
+    }
+
+    // 6. 加载 App 站点数据并启动唯一的底盘服务线程
     {
         int result = app_manager_robot_init();
         if (result != ROBOT_CHASSIS_OK)
@@ -251,6 +261,11 @@ void app_manager_init(lv_ui *ui)
     pthread_mutex_lock(&g_robot_access_mutex);
     g_initialized = true;
     pthread_mutex_unlock(&g_robot_access_mutex);
+
+    if (g_robot_available && robot_gateway_ipc_start() != 0)
+    {
+        APP_MANAGER_LOG_ERROR("机器人调试 IPC 启动失败");
+    }
 
     // 6. 如果已连接 WiFi，尝试 NTP 对时
     if (wifi_manager_is_connected())
@@ -268,6 +283,10 @@ void app_manager_init(lv_ui *ui)
 
 void app_manager_deinit(void)
 {
+    /* 先停止语音入口，避免退出期间继续投递 LVGL 和 MCU 业务。 */
+    voice_command_service_deinit();
+    /* 先停止 IPC，避免退出期间有新的机器人命令进入。 */
+    robot_gateway_ipc_stop();
     pthread_mutex_lock(&g_robot_access_mutex);
     if (!g_initialized)
     {
@@ -311,6 +330,7 @@ int app_manager_robot_station_update_json(const char *json, size_t length)
     return result;
 }
 
+// 机器人导航到指定站点
 int app_manager_robot_navigate(const char *name, robot_station_t *target)
 {
     int result;
@@ -322,11 +342,45 @@ int app_manager_robot_navigate(const char *name, robot_station_t *target)
         return ROBOT_CHASSIS_ERR_STATE;
     }
     result = robot_station_navigate_with_target(&g_station_store, name, target,
-             NULL, NULL);
+             NULL);
     pthread_mutex_unlock(&g_robot_access_mutex);
     return result;
 }
 
+// 解析站点名称，获取对应的坐标信息
+int app_manager_robot_resolve_navigation_target(const char *name,
+        robot_station_t *target)
+{
+    int result;
+
+    pthread_mutex_lock(&g_robot_access_mutex);
+    if (!g_initialized || !g_robot_available || target == NULL)
+    {
+        pthread_mutex_unlock(&g_robot_access_mutex);
+        return ROBOT_CHASSIS_ERR_STATE;
+    }
+    result = robot_station_resolve_navigation_target(&g_station_store, name, target);
+    pthread_mutex_unlock(&g_robot_access_mutex);
+    return result;
+}
+
+// 提交导航目标给底盘
+int app_manager_robot_submit_navigation_target(const robot_station_t *target)
+{
+    int result;
+
+    pthread_mutex_lock(&g_robot_access_mutex);
+    if (!g_initialized || !g_robot_available || target == NULL)
+    {
+        pthread_mutex_unlock(&g_robot_access_mutex);
+        return ROBOT_CHASSIS_ERR_STATE;
+    }
+    result = robot_station_submit_navigation_target(target, NULL);
+    pthread_mutex_unlock(&g_robot_access_mutex);
+    return result;
+}
+
+// 充电回仓
 int app_manager_robot_return_to_base(robot_station_t *target)
 {
     int result;
@@ -337,8 +391,8 @@ int app_manager_robot_return_to_base(robot_station_t *target)
         pthread_mutex_unlock(&g_robot_access_mutex);
         return ROBOT_CHASSIS_ERR_STATE;
     }
-    result = robot_station_return_to_base_with_target(&g_station_store, target,
-             NULL, NULL);
+    result = robot_station_return_to_base(&g_station_store, target,
+                                          NULL);
     pthread_mutex_unlock(&g_robot_access_mutex);
     return result;
 }
@@ -383,6 +437,68 @@ int app_manager_robot_get_status(robot_chassis_status_t *status)
     pthread_mutex_unlock(&g_robot_state_mutex);
     pthread_mutex_unlock(&g_robot_access_mutex);
     return ROBOT_CHASSIS_OK;
+}
+
+static bool app_manager_robot_valid_map_name(const char *map_name)
+{
+    size_t index;
+    size_t length;
+
+    if (map_name == NULL || map_name[0] == '\0')
+    {
+        return false;
+    }
+    length = strlen(map_name);
+    if (length >= APP_ROBOT_MAP_NAME_SIZE || strcmp(map_name, ".") == 0 ||
+            strcmp(map_name, "..") == 0)
+    {
+        return false;
+    }
+    for (index = 0U; index < length; index++)
+    {
+        unsigned char value = (unsigned char)map_name[index];
+
+        if (value == '/' || value == '\\' || iscntrl(value))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+int app_manager_robot_backup_map(const char *map_name)
+{
+    char temporary_path[APP_ROBOT_BACKUP_PATH_SIZE];
+    char final_path[APP_ROBOT_BACKUP_PATH_SIZE];
+    int temporary_length;
+    int final_length;
+    int result;
+
+    if (!app_manager_robot_valid_map_name(map_name))
+    {
+        return ROBOT_CHASSIS_ERR_INVALID_ARG;
+    }
+    temporary_length = snprintf(temporary_path, sizeof(temporary_path),
+                                "/mnt/udisk/.%s.part", map_name);
+    final_length = snprintf(final_path, sizeof(final_path),
+                            "/mnt/udisk/%s", map_name);
+    if (temporary_length < 0 ||
+            (size_t)temporary_length >= sizeof(temporary_path) ||
+            final_length < 0 || (size_t)final_length >= sizeof(final_path))
+    {
+        return ROBOT_CHASSIS_ERR_LIMIT;
+    }
+
+    pthread_mutex_lock(&g_robot_access_mutex);
+    if (!g_initialized || !g_robot_available)
+    {
+        pthread_mutex_unlock(&g_robot_access_mutex);
+        return ROBOT_CHASSIS_ERR_STATE;
+    }
+    result = robot_chassis_service_backup_map(map_name, temporary_path,
+             final_path);
+    pthread_mutex_unlock(&g_robot_access_mutex);
+    return result;
 }
 
 lv_ui *app_manager_get_ui(void)

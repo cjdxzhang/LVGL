@@ -4,11 +4,12 @@
 #include "robot_chassis_transfer.h"
 
 typedef int (*robot_chassis_backup_emit_t)(
-    const robot_chassis_command_t *command, void *user_data);
+    const robot_chassis_command_t *command);
 typedef void (*robot_chassis_backup_result_t)(
-    int result, const char *final_path, void *user_data);
+    int result, const char *final_path);
 
-typedef struct {
+typedef struct
+{
     bool active;
     robot_chassis_backup_transfer_t transfer;
     char map_name[128];
@@ -16,14 +17,12 @@ typedef struct {
     char final_path[256];
     robot_chassis_backup_emit_t emit;
     robot_chassis_backup_result_t result;
-    void *user_data;
 } robot_chassis_backup_controller_t;
 
 void robot_chassis_backup_controller_init(
     robot_chassis_backup_controller_t *controller,
     robot_chassis_backup_emit_t emit,
-    robot_chassis_backup_result_t result,
-    void *user_data);
+    robot_chassis_backup_result_t result);
 int robot_chassis_backup_controller_start(
     robot_chassis_backup_controller_t *controller, const char *map_name,
     const char *temporary_path, const char *final_path);

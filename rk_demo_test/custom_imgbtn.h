@@ -4,10 +4,14 @@
 
 #include "lvgl.h"
 
-extern int16_t to_preparing_flat; /* 记录转到preparing的标志 1--注水中，2--自清洁中，3--移动中，4--返回基站中*/
-extern int16_t to_setting_flat; /* 记录转到setting的标志 1--从index跳转，2--从working跳转 */
-extern int16_t to_location_flat; /* 记录转到location的标志 1--从index跳转，2--从working跳转 3--从preparing跳转 */
-typedef enum {
+extern int16_t
+to_preparing_flat; /* 记录转到preparing的标志 1--注水中，2--自清洁中，3--移动中，4--返回基站中*/
+extern int16_t
+to_setting_flat; /* 记录转到setting的标志 1--从index跳转，2--从working跳转 */
+extern int16_t
+to_location_flat; /* 记录转到location的标志 1--从index跳转，2--从working跳转 3--从preparing跳转 */
+typedef enum
+{
     UI_SCREEN_INDEX,
     UI_SCREEN_SETTING,
     UI_SCREEN_PREPARING,
@@ -31,11 +35,11 @@ typedef enum {
  * @param h 高度
  * @return 按钮容器对象指针
  */
-lv_obj_t* imgbtn_create(lv_obj_t* parent, const void* img_src, const char* text, 
+lv_obj_t *imgbtn_create(lv_obj_t *parent, const void *img_src, const char *text,
                         lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h);
-lv_obj_t* imgbtn_create_without_bg(lv_obj_t* parent, const void* img_src, const char* text, 
-                        lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h);
-void navigate_to_screen(ui_screen_id_t target_screen);
+lv_obj_t *imgbtn_create_without_bg(lv_obj_t *parent, const void *img_src, const char *text,
+                                   lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h);
+bool navigate_to_screen(ui_screen_id_t target_screen);
 void setting_back(lv_event_t *e);
 /**  clicked事件，从setting->index **/
 void setting_to_index(lv_event_t *e);
@@ -136,4 +140,18 @@ void stop_dialog_cleanup(void);
  * @param message 要显示的提示文字内容
  */
 void show_message_dialog(lv_obj_t *parent, const char *message);
+
+/**
+ * 显示确认后跳转页面的提示对话框。
+ *
+ * @param parent        父对象
+ * @param message       提示文字
+ * @param target_screen 点击“确定”后跳转的页面
+ */
+void show_message_dialog_and_navigate(lv_obj_t *parent,
+                                      const char *message,
+                                      ui_screen_id_t target_screen);
+
+/** 清理当前仍存在的通用提示对话框。 */
+void message_dialog_cleanup(void);
 #endif

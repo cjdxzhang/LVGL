@@ -7,6 +7,10 @@
 #include "app_log.h"
 #include "lv_port_init.h"
 #include "backlight_control.h"
+#include "cleaning_animation.h"
+#include "self_clean_flow.h"
+#include "events_init.h"
+#include "mode_navigation_flow.h"
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
@@ -56,8 +60,8 @@
 #define BUCKET_TEMP_BLINK_TOGGLE_COUNT 4
 #define LINK_STATUS_DETACHED 0x00u
 #define LINK_STATUS_DOCKED 0x01u
-#define UI_ROTATION_DETACHED 0
-#define UI_ROTATION_DOCKED 180
+#define UI_ROTATION_DETACHED 180
+#define UI_ROTATION_DOCKED 0
 #define BUCKET_AUTO_TIMER_DELAY_MS 1000u
 #define BUCKET_COUNTDOWN_REFRESH_MS 250u
 #define BUCKET_TIMER_OPTION_COUNT 5u
@@ -69,6 +73,9 @@
 #define BUCKET_STANDBY_DOUBLE_TAP_MS 600u
 #define BUCKET_STANDBY_ARC_START_ANGLE 0
 #define BUCKET_STANDBY_ARC_COMPLETE_ANGLE 359
+#define SELF_CLEAN_FINISH_AUTO_RETURN_MS 120000
+#define MCU_REPORT_WATCHDOG_PERIOD_MS 1000u
+#define MCU_REPORT_TIMEOUT_MS 10000u
 
 #define CONF_LOCATION_MODE_OPTIONS_LEN ((SYSTEM_MODE_NAME_LEN + 1) * SYSTEM_MODE_MAX_COUNT)
 
@@ -147,7 +154,16 @@ static cleaning_ui_t cleaning_ui;
 static bucket_temp_edit_state_t g_bucket_temp_edit = {0};
 static bucket_countdown_state_t g_bucket_countdown = {0};
 static bucket_standby_state_t g_bucket_standby = {0};
+static self_clean_flow_t g_self_clean_flow = {0};
+static auto_water_navigation_flow_t g_auto_water_navigation = {0};
+static int g_auto_water_target_location_index = -1;
+static system_base_flow_t g_base_flow = SYSTEM_BASE_FLOW_IDLE;
+static bool g_drying_active_reported = false;
 static int16_t g_applied_link_status = -1;
+static lv_timer_t *g_mcu_report_watchdog_timer = NULL;
+static uint32_t g_mcu_watchdog_last_sequence = 0u;
+static uint32_t g_mcu_watchdog_last_report_tick = 0u;
+static bool g_mcu_watchdog_outage_latched = false;
 
 /* 全局变量定义（在头文件中用 extern 声明，在此处给出唯一定义） */
 int16_t last_link_status =
@@ -157,7 +173,6 @@ bool has_mcu_status_report =
 int16_t temp_set = 35;        /* 温度设置值，单位 °C */
 uint32_t timer_set = 600;    /* 定时设置值，单位 秒 */
 uint32_t remaining_seconds = 0; /* 桶体本地倒计时剩余秒数 */
-int16_t current_temp = 0;     /* 当前温度，单位 °C */
 int16_t current_water_level = 0; /* 当前水位，范围 0-3 */
 int water_level = 0;   /* 目标水位挡位，范围 0-3 */
 bool use_drug1 = false;        /* 是否使用药物1 */
@@ -207,9 +222,6 @@ bool _is_conf_location_page_initialized = false;
 bool _is_conf_mode_detail_page_initialized = false;
 bool _is_preparing_page_initialized = false;
 
-/**全局变量，记录是否正在排水 */
-bool g_is_draining = false;
-
 static system_mode_t g_mode_settings[SYSTEM_MODE_MAX_COUNT];
 system_location_t g_location_settings[SYSTEM_LOCATION_MAX_COUNT];
 static size_t g_mode_count = 0;
@@ -221,8 +233,9 @@ static lv_obj_t *g_conf_mode_cont_2 = NULL;
 static uint32_t g_preparing_countdown_remaining = 0;
 static lv_obj_t *g_working_pause_btn = NULL;
 static lv_obj_t *g_working_play_btn = NULL;
-static lv_obj_t *g_preparing_btn_location = NULL;
 static lv_timer_t *g_preparing_page_timer = NULL;
+static lv_obj_t *g_self_clean_finish_button = NULL;
+static lv_timer_t *g_self_clean_finish_timer = NULL;
 static lv_timer_t *g_working_return_dialog_timer = NULL;
 static lv_timer_t *g_working_timer = NULL;
 lv_timer_t *g_auto_drain_timer = NULL;
@@ -255,8 +268,11 @@ static void conf_mode_detail_screen_lifecycle_cb(lv_event_t *e);
 static lv_obj_t *conf_location_create_info_label(lv_obj_t *parent);
 static void display_preparing_settings(lv_ui *ui);
 static void refresh_auto_water_status(lv_timer_t *timer);
+static void mcu_report_watchdog_timer_cb(lv_timer_t *timer);
 static void update_self_cleaning_progress(lv_ui *ui);
 static void preparing_screen_lifecycle_cb(lv_event_t *e);
+static void self_clean_finish_cleanup(void);
+static void self_clean_finish_show(lv_ui *ui);
 static void working_screen_lifecycle_cb(lv_event_t *e);
 static bool bucket_temp_valid(int16_t temp);
 static int16_t bucket_temp_clamp(int temp);
@@ -283,6 +299,178 @@ static void bucket_auto_start_detached(void);
 static void bucket_working_sync_function_icons(lv_ui *ui);
 static void bucket_standby_cancel_press(void);
 static void bucket_standby_page_cleanup(void);
+
+typedef struct
+{
+    bool standby_sent;
+} navigation_start_context_t;
+
+const char *system_base_flow_name(system_base_flow_t flow)
+{
+    switch (flow)
+    {
+    case SYSTEM_BASE_FLOW_IDLE:
+        return "IDLE";
+    case SYSTEM_BASE_FLOW_WATERING:
+        return "WATERING";
+    case SYSTEM_BASE_FLOW_SELF_CLEANING:
+        return "SELF_CLEANING";
+    case SYSTEM_BASE_FLOW_DRYING:
+        return "DRYING";
+    case SYSTEM_BASE_FLOW_MOVING:
+        return "MOVING";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+system_base_flow_t system_base_flow_get(void)
+{
+    return g_base_flow;
+}
+
+bool system_base_flow_try_start(system_base_flow_t flow, const char *source)
+{
+    if (flow == SYSTEM_BASE_FLOW_IDLE || g_base_flow != SYSTEM_BASE_FLOW_IDLE)
+    {
+        SYSTEM_MANAGER_LOG_WARN("基站流程启动被拒绝: source=%s request=%s active=%s",
+                                source == NULL ? "<unknown>" : source,
+                                system_base_flow_name(flow),
+                                system_base_flow_name(g_base_flow));
+        return false;
+    }
+    g_base_flow = flow;
+    if (flow == SYSTEM_BASE_FLOW_DRYING)
+    {
+        g_drying_active_reported = false;
+    }
+    SYSTEM_MANAGER_LOG_USER("基站流程已占用: source=%s flow=%s",
+                            source == NULL ? "<unknown>" : source,
+                            system_base_flow_name(flow));
+    return true;
+}
+
+void system_base_flow_finish(system_base_flow_t expected, const char *source)
+{
+    if (g_base_flow != expected)
+    {
+        SYSTEM_MANAGER_LOG_WARN("忽略不匹配的基站流程释放: source=%s expected=%s active=%s",
+                                source == NULL ? "<unknown>" : source,
+                                system_base_flow_name(expected),
+                                system_base_flow_name(g_base_flow));
+        return;
+    }
+    SYSTEM_MANAGER_LOG_USER("基站流程已释放: source=%s flow=%s",
+                            source == NULL ? "<unknown>" : source,
+                            system_base_flow_name(expected));
+    g_base_flow = SYSTEM_BASE_FLOW_IDLE;
+    g_drying_active_reported = false;
+}
+
+system_bucket_state_t system_bucket_state_get(void)
+{
+    if (g_base_flow == SYSTEM_BASE_FLOW_MOVING)
+    {
+        return SYSTEM_BUCKET_STATE_MOVING;
+    }
+    if (g_bucket_standby.sleeping || g_bucket_standby.submitted)
+    {
+        return SYSTEM_BUCKET_STATE_STANDBY;
+    }
+    return SYSTEM_BUCKET_STATE_NORMAL;
+}
+
+const char *system_bucket_state_name(system_bucket_state_t state)
+{
+    switch (state)
+    {
+    case SYSTEM_BUCKET_STATE_NORMAL:
+        return "NORMAL";
+    case SYSTEM_BUCKET_STATE_STANDBY:
+        return "STANDBY";
+    case SYSTEM_BUCKET_STATE_MOVING:
+        return "MOVING";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+// 解析导航目标名称，获取对应的坐标信息
+static int system_navigation_resolve(const char *name,
+                                     robot_station_t *target,
+                                     void *user_data)
+{
+    LV_UNUSED(user_data);
+    return app_manager_robot_resolve_navigation_target(name, target);
+}
+
+// 导航前下发基站待机命令
+static void system_navigation_standby(void *user_data)
+{
+    navigation_start_context_t *context =
+        (navigation_start_context_t *)user_data;
+
+    serial_base_standby();
+    context->standby_sent = true;
+    SYSTEM_MANAGER_LOG_USER("导航前已下发基站待机命令 B1");
+}
+
+// 下发导航命令
+static int system_navigation_submit(const robot_station_t *target,
+                                    void *user_data)
+{
+    LV_UNUSED(user_data);
+    return app_manager_robot_submit_navigation_target(target);
+}
+
+// 自动上水完成后，导航到指定站点
+static int system_start_navigation(lv_obj_t *dialog_parent,
+                                   const char *target_name,
+                                   int target_location_index)
+{
+    navigation_start_context_t context = {0};
+    robot_station_t target = {0};
+    int result;
+
+    if (!system_base_flow_try_start(SYSTEM_BASE_FLOW_MOVING, "navigation"))
+    {
+        return ROBOT_CHASSIS_ERR_BUSY;
+    }
+    result = mode_navigation_start(target_name,
+                                   system_navigation_resolve,
+                                   system_navigation_standby,
+                                   system_navigation_submit,
+                                   &context,
+                                   &target);
+
+    if (result != ROBOT_CHASSIS_OK)
+    {
+        const char *message = context.standby_sent ?
+                              "导航失败: 移动命令提交失败" :
+                              "导航失败: 未找到目标站点";
+        SYSTEM_MANAGER_LOG_ERROR("导航启动失败: name=%s ret=%d standby=%d",
+                                 target_name == NULL ? "" : target_name,
+                                 result,
+                                 context.standby_sent ? 1 : 0);
+        show_message_dialog_and_navigate(dialog_parent, message,
+                                         UI_SCREEN_INDEX);
+        system_base_flow_finish(SYSTEM_BASE_FLOW_MOVING,
+                                "navigation-submit-failed");
+        return result;
+    }
+
+    g_nav_target_x = (float)target.x;
+    g_nav_target_y = (float)target.y;
+    g_nav_target_z = (float)target.z;
+    going_to_location = target_location_index;
+    to_preparing_flat = 3;
+    if (!navigate_to_screen(UI_SCREEN_PREPARING))
+    {
+        /* 底盘命令已经提交，保持 MOVING 互斥直到状态轮询结束。 */
+        SYSTEM_MANAGER_LOG_ERROR("导航已提交但准备页切换失败，保持移动互斥");
+    }
+    return ROBOT_CHASSIS_OK;
+}
 
 static bool working_return_dialog_obj_is_valid(const lv_obj_t *obj)
 {
@@ -347,6 +535,7 @@ static void working_return_dialog_timer_cb(lv_timer_t *timer)
     }
 }
 
+// 启动返回对话框倒计时
 static void working_return_dialog_start_countdown(void)
 {
     working_return_dialog_cleanup();
@@ -401,10 +590,6 @@ static void preparing_nav_check_timer_cb(lv_timer_t *timer)
         return;
     }
 
-
-    /* 主动发送 t=42；协议线程只更新 app_manager 中的线程安全快照。 */
-    (void)app_manager_robot_request_status();
-
     /* LVGL 线程只读取状态拷贝，不由协议回调直接操作界面。 */
     robot_chassis_status_t state = {0};
     if (app_manager_robot_get_status(&state) != ROBOT_CHASSIS_OK ||
@@ -429,6 +614,8 @@ static void preparing_nav_check_timer_cb(lv_timer_t *timer)
             g_nav_check_timer = NULL;
         }
         g_nav_timeout_count = 0;
+        system_base_flow_finish(SYSTEM_BASE_FLOW_MOVING,
+                                "navigation-arrived");
         preparing_move_finished(timer);
         return;
     }
@@ -445,9 +632,100 @@ timeout_check:
             g_nav_check_timer = NULL;
         }
         g_nav_timeout_count = 0;
+        system_base_flow_finish(SYSTEM_BASE_FLOW_MOVING,
+                                "navigation-timeout");
         /* 超时后显示提示，回到首页 */
-        show_message_dialog(ui->preparing, "导航超时，请检查机器人状态");
-        navigate_to_screen(UI_SCREEN_INDEX);
+        show_message_dialog_and_navigate(ui->preparing,
+                                         "导航超时，请检查机器人状态",
+                                         UI_SCREEN_INDEX);
+    }
+}
+
+static void self_clean_finish_return_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED)
+    {
+        return;
+    }
+
+    navigate_to_screen(UI_SCREEN_INDEX);
+}
+
+static void self_clean_finish_auto_return_cb(lv_timer_t *timer)
+{
+    (void)timer;
+    g_self_clean_finish_timer = NULL;
+    navigate_to_screen(UI_SCREEN_INDEX);
+}
+
+static void self_clean_finish_cleanup(void)
+{
+    if (g_self_clean_finish_timer != NULL)
+    {
+        lv_timer_delete(g_self_clean_finish_timer);
+        g_self_clean_finish_timer = NULL;
+    }
+    if (g_self_clean_finish_button != NULL)
+    {
+        if (lv_obj_is_valid(g_self_clean_finish_button))
+        {
+            lv_obj_delete(g_self_clean_finish_button);
+        }
+        g_self_clean_finish_button = NULL;
+    }
+}
+
+static void self_clean_finish_show(lv_ui *ui)
+{
+    lv_obj_t *icon;
+    lv_obj_t *label;
+
+    if (ui == NULL || ui->preparing_cont_3 == NULL)
+    {
+        return;
+    }
+
+    self_clean_finish_cleanup();
+    preparing_stop_button_set_hidden(true);
+
+    g_self_clean_finish_button = imgbtn_create(ui->preparing_cont_3,
+                                 &_home_RGB565A8_100x100,
+                                 "返回首页\n(2min后自动)",
+                                 0, 215, 170, 187);
+    if (g_self_clean_finish_button == NULL)
+    {
+        return;
+    }
+
+    lv_obj_set_style_radius(g_self_clean_finish_button, 20, 0);
+    icon = lv_obj_get_child(g_self_clean_finish_button, 0);
+    label = lv_obj_get_child(g_self_clean_finish_button, 1);
+    if (icon != NULL && lv_obj_is_valid(icon))
+    {
+        lv_image_set_scale(icon, LV_SCALE_NONE);
+        lv_obj_align(icon, LV_ALIGN_CENTER, 0, -(187 / 6));
+    }
+    if (label != NULL && lv_obj_is_valid(label))
+    {
+        lv_obj_set_size(label, 170, 70);
+        lv_obj_set_style_text_font(label,
+                                   &lv_font_SourceHanSansSC_Regular_25,
+                                   0);
+        lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_align(label, LV_ALIGN_CENTER, 0, 187 / 6 + 12);
+    }
+    lv_obj_add_event_cb(g_self_clean_finish_button,
+                        self_clean_finish_return_cb,
+                        LV_EVENT_CLICKED,
+                        NULL);
+
+    g_self_clean_finish_timer = lv_timer_create(
+                                    self_clean_finish_auto_return_cb,
+                                    SELF_CLEAN_FINISH_AUTO_RETURN_MS,
+                                    ui);
+    if (g_self_clean_finish_timer != NULL)
+    {
+        lv_timer_set_repeat_count(g_self_clean_finish_timer, 1);
     }
 }
 
@@ -468,17 +746,13 @@ void preparing_page_cleanup(void)
         g_preparing_page_timer = NULL;
     }
 
-    if (g_preparing_btn_location != NULL)
-    {
-        if (lv_obj_is_valid(g_preparing_btn_location))
-        {
-            lv_obj_del(g_preparing_btn_location);
-        }
-        g_preparing_btn_location = NULL;
-    }
+    cleaning_animation_cleanup();
+    self_clean_flow_stop(&g_self_clean_flow);
+    self_clean_finish_cleanup();
 
     /* stop_dialog_cleanup 内部已做对象有效性检查，可直接调用 */
     stop_dialog_cleanup();
+    message_dialog_cleanup();
 }
 /**暂停工作，根据当前定位，返回到前一个页面 */
 void preparing_page_stop(lv_event_t *e)
@@ -487,6 +761,14 @@ void preparing_page_stop(lv_event_t *e)
     if (code != LV_EVENT_CLICKED)
     {
         return;
+    }
+    if (to_preparing_flat == 1)
+    {
+        serial_base_standby();
+        system_auto_water_navigation_cancel();
+        system_base_flow_finish(SYSTEM_BASE_FLOW_WATERING,
+                                "water-ui-stop");
+        to_preparing_flat = 0;
     }
     if (current_location == 0 && last_link_status == 0x01)
     {
@@ -504,6 +786,10 @@ static void preparing_screen_lifecycle_cb(lv_event_t *e)
 
     if (code == LV_EVENT_SCREEN_UNLOAD_START || code == LV_EVENT_DELETE)
     {
+        if (to_preparing_flat == 1)
+        {
+            system_auto_water_navigation_cancel();
+        }
         preparing_page_cleanup();
     }
 }
@@ -545,6 +831,7 @@ static int16_t bucket_temp_clamp(int temp)
     return (int16_t)temp;
 }
 
+// 获取桶体温度的基准值，用于显示和编辑
 static int16_t bucket_temp_base_value(void)
 {
     // 正在编辑时，使用上次编辑的目标温度 target_temp
@@ -556,11 +843,6 @@ static int16_t bucket_temp_base_value(void)
     if (g_bucket_temp_edit.has_actual_temp && bucket_temp_valid(g_bucket_temp_edit.actual_temp))
     {
         return g_bucket_temp_edit.actual_temp;
-    }
-    // 否则使用全局实际温度 current_temp
-    if (bucket_temp_valid(current_temp))
-    {
-        return current_temp;
     }
     return BUCKET_TEMP_FALLBACK;
 }
@@ -579,6 +861,7 @@ static void bucket_temp_set_label(lv_obj_t *label, int16_t temp)
     lv_obj_set_style_text_opa(label, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
 }
 
+// 取消桶体温度编辑状态的闪烁效果，并重置相关计数器
 static void bucket_temp_cancel_blink(void)
 {
     if (g_bucket_temp_edit.blink_timer != NULL)
@@ -590,6 +873,7 @@ static void bucket_temp_cancel_blink(void)
     g_bucket_temp_edit.blink_visible = true;
 }
 
+// 显示桶体温度的实际值，如果没有有效的实际温度，则显示回退值
 static void bucket_temp_show_actual(lv_obj_t *label)
 {
     bucket_temp_cancel_blink();
@@ -601,10 +885,6 @@ static void bucket_temp_show_actual(lv_obj_t *label)
     if (g_bucket_temp_edit.has_actual_temp)
     {
         bucket_temp_set_label(label, g_bucket_temp_edit.actual_temp);
-    }
-    else if (bucket_temp_valid(current_temp))
-    {
-        bucket_temp_set_label(label, current_temp);
     }
     else
     {
@@ -710,6 +990,7 @@ static void bucket_temp_reset_restore_timer(void)
     }
 }
 
+// 桶体页面调整温度
 static void bucket_temp_start_edit(lv_obj_t *label, int16_t temp)
 {
     bucket_temp_cancel_blink();
@@ -1481,7 +1762,6 @@ void bucket_temp_update_actual_from_mcu(int16_t temp)
         return;
     }
 
-    current_temp = temp;
     g_bucket_temp_edit.actual_temp = temp;
     g_bucket_temp_edit.has_actual_temp = true;
 }
@@ -2247,6 +2527,304 @@ void location_grid_btn_clicked(lv_event_t *e)
     }
 }
 
+int system_start_selected_location_navigation(lv_obj_t *dialog_parent)
+{
+    const system_location_t *location;
+
+    if (current_selected_location_index < 0 ||
+            current_selected_location_index >= (int)g_location_count)
+    {
+        show_message_dialog_and_navigate(dialog_parent,
+                                         "导航失败: 未找到目标站点",
+                                         UI_SCREEN_INDEX);
+        return ROBOT_CHASSIS_ERR_INVALID_ARG;
+    }
+    location = &g_location_settings[current_selected_location_index];
+    return system_start_navigation(dialog_parent, location->name,
+                                   location->index);
+}
+
+void system_auto_water_navigation_arm(void)
+{
+    const char *target_name = NULL;
+
+    g_auto_water_target_location_index = -1;
+    if (current_selected_mode_index >= 0 &&
+            current_selected_mode_index < (int)g_mode_count)
+    {
+        const system_mode_t *mode =
+            &g_mode_settings[current_selected_mode_index];
+        if (mode->position >= 0 && mode->position < (int)g_location_count &&
+                g_location_settings[mode->position].name[0] != '\0')
+        {
+            target_name = g_location_settings[mode->position].name;
+            g_auto_water_target_location_index =
+                g_location_settings[mode->position].index;
+        }
+    }
+    auto_water_navigation_flow_arm(
+        &g_auto_water_navigation,
+        target_name,
+        serial_mcu_status_report_sequence());
+    SYSTEM_MANAGER_LOG_USER("自动注水导航已武装: mode=%d target=%s",
+                            current_selected_mode_index,
+                            target_name == NULL ? "<invalid>" : target_name);
+}
+
+void system_auto_water_navigation_cancel(void)
+{
+    auto_water_navigation_flow_cancel(&g_auto_water_navigation);
+    g_auto_water_target_location_index = -1;
+}
+
+void system_self_clean_stop_confirmed(void)
+{
+    mode_navigation_confirm_self_clean_stop(
+        to_preparing_flat == 2 && is_self_cleaning,
+        system_navigation_standby,
+        &(navigation_start_context_t)
+    {
+        0
+    });
+    if (g_base_flow == SYSTEM_BASE_FLOW_SELF_CLEANING)
+    {
+        system_base_flow_finish(SYSTEM_BASE_FLOW_SELF_CLEANING,
+                                "self-clean-ui-stop");
+    }
+    is_self_cleaning = false;
+    to_preparing_flat = 0;
+}
+
+static void system_voice_stop_runtime(void)
+{
+    bool was_self_cleaning = to_preparing_flat == 2 ||
+                             is_self_cleaning || g_self_clean_flow.active;
+
+    bucket_auto_start_cancel();
+    bucket_temp_clear_edit(NULL);
+    bucket_countdown_stop_for_standby();
+    bucket_working_clear_function_state();
+    system_auto_water_navigation_cancel();
+    self_clean_flow_stop(&g_self_clean_flow);
+    is_self_cleaning = false;
+    if (was_self_cleaning)
+    {
+        preparing_page_cleanup();
+        /* 阻止已经排队的准备页加载回调再次启动自清洁并下发 B3。 */
+        to_preparing_flat = 0;
+    }
+    if (g_base_flow != SYSTEM_BASE_FLOW_IDLE &&
+            g_base_flow != SYSTEM_BASE_FLOW_MOVING)
+    {
+        SYSTEM_MANAGER_LOG_USER("全局停止释放基站流程: active=%s",
+                                system_base_flow_name(g_base_flow));
+        g_base_flow = SYSTEM_BASE_FLOW_IDLE;
+        g_drying_active_reported = false;
+    }
+}
+
+static void system_voice_stop_self_clean(void)
+{
+    preparing_page_cleanup();
+    self_clean_flow_stop(&g_self_clean_flow);
+    self_clean_finish_cleanup();
+    is_self_cleaning = false;
+    to_preparing_flat = 0;
+    system_base_flow_finish(SYSTEM_BASE_FLOW_SELF_CLEANING,
+                            "voice-clean-stop");
+}
+
+static void system_voice_massage_start(void)
+{
+    if (massage_intensity < 3)
+    {
+        massage_intensity++;
+    }
+    bucket_working_sync_function_icons(&guider_ui);
+    serial_bucket_massage();
+}
+
+static void system_voice_temp_step(int delta)
+{
+    temp_set = bucket_temp_clamp((int)temp_set + delta);
+    if (guider_ui.working_label_temperature != NULL &&
+            lv_obj_is_valid(guider_ui.working_label_temperature))
+    {
+        bucket_temp_start_edit(guider_ui.working_label_temperature, temp_set);
+    }
+    if (guider_ui.index_temp_value != NULL &&
+            lv_obj_is_valid(guider_ui.index_temp_value))
+    {
+        update_temp_set(&guider_ui);
+    }
+    serial_bucket_heat();
+}
+
+static system_command_decision_t system_voice_decision(
+    system_command_result_t result, const char *domain,
+    const char *state, const char *reason)
+{
+    system_command_decision_t decision = {result, domain, state, reason};
+
+    return decision;
+}
+
+static bool system_voice_is_detached_command(voice_command_t command)
+{
+    return command == VOICE_COMMAND_FOOTBATH_START ||
+           command == VOICE_COMMAND_FOOTBATH_STOP ||
+           command == VOICE_COMMAND_MASSAGE_START ||
+           command == VOICE_COMMAND_MASSAGE_STOP ||
+           command == VOICE_COMMAND_TEMP_UP ||
+           command == VOICE_COMMAND_TEMP_DOWN;
+}
+
+static bool system_voice_is_docked_command(voice_command_t command)
+{
+    return command == VOICE_COMMAND_DRY_START ||
+           command == VOICE_COMMAND_CLEAN_START ||
+           command == VOICE_COMMAND_CLEAN_STOP;
+}
+
+system_command_decision_t system_voice_command_execute(voice_command_t command)
+{
+    system_bucket_state_t bucket_state;
+
+    if (command == VOICE_COMMAND_STOP_ALL)
+    {
+        system_voice_stop_runtime();
+        serial_base_standby();
+        return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
+                                     "GLOBAL", "ANY", "accepted");
+    }
+    if (!has_mcu_status_report)
+    {
+        return system_voice_decision(SYSTEM_COMMAND_STATE_REJECTED,
+                                     "POSITION", "UNKNOWN",
+                                     "no-valid-mcu-status");
+    }
+    if (system_voice_is_detached_command(command) &&
+            last_link_status != LINK_STATUS_DETACHED)
+    {
+        return system_voice_decision(SYSTEM_COMMAND_STATE_REJECTED,
+                                     "POSITION", "DOCKED",
+                                     "detached-required");
+    }
+    if (system_voice_is_docked_command(command) &&
+            last_link_status != LINK_STATUS_DOCKED)
+    {
+        return system_voice_decision(SYSTEM_COMMAND_STATE_REJECTED,
+                                     "POSITION", "DETACHED",
+                                     "docked-required");
+    }
+    if (system_voice_is_detached_command(command))
+    {
+        bucket_state = system_bucket_state_get();
+        if (bucket_state != SYSTEM_BUCKET_STATE_NORMAL)
+        {
+            return system_voice_decision(SYSTEM_COMMAND_STATE_REJECTED,
+                                         "BUCKET",
+                                         system_bucket_state_name(bucket_state),
+                                         "bucket-state-conflict");
+        }
+        if (g_base_flow != SYSTEM_BASE_FLOW_IDLE)
+        {
+            return system_voice_decision(SYSTEM_COMMAND_INTERLOCK_REJECTED,
+                                         "BASE",
+                                         system_base_flow_name(g_base_flow),
+                                         "base-flow-conflict");
+        }
+    }
+
+    switch (command)
+    {
+    case VOICE_COMMAND_FOOTBATH_START:
+        constant_temperature = true;
+        bucket_working_sync_function_icons(&guider_ui);
+        serial_bucket_heat();
+        system_voice_massage_start();
+        return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
+                                     "BUCKET", "NORMAL", "accepted");
+    case VOICE_COMMAND_FOOTBATH_STOP:
+        system_voice_stop_runtime();
+        serial_base_standby();
+        return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
+                                     "BUCKET", "NORMAL", "accepted");
+    case VOICE_COMMAND_MASSAGE_START:
+        system_voice_massage_start();
+        return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
+                                     "BUCKET", "NORMAL", "accepted");
+    case VOICE_COMMAND_MASSAGE_STOP:
+        massage_intensity = 0;
+        bucket_working_sync_function_icons(&guider_ui);
+        serial_bucket_massage();
+        return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
+                                     "BUCKET", "NORMAL", "accepted");
+    case VOICE_COMMAND_TEMP_UP:
+        system_voice_temp_step(2);
+        return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
+                                     "BUCKET", "NORMAL", "accepted");
+    case VOICE_COMMAND_TEMP_DOWN:
+        system_voice_temp_step(-2);
+        return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
+                                     "BUCKET", "NORMAL", "accepted");
+    case VOICE_COMMAND_DRY_START:
+        if (!system_base_flow_try_start(SYSTEM_BASE_FLOW_DRYING,
+                                        "voice-dry-start"))
+        {
+            return system_voice_decision(SYSTEM_COMMAND_INTERLOCK_REJECTED,
+                                         "BASE",
+                                         system_base_flow_name(g_base_flow),
+                                         "base-flow-conflict");
+        }
+        serial_base_hot_dry(1u);
+        return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
+                                     "BASE", "DRYING", "accepted");
+    case VOICE_COMMAND_CLEAN_START:
+        if (!system_base_flow_try_start(SYSTEM_BASE_FLOW_SELF_CLEANING,
+                                        "voice-clean-start"))
+        {
+            return system_voice_decision(SYSTEM_COMMAND_INTERLOCK_REJECTED,
+                                         "BASE",
+                                         system_base_flow_name(g_base_flow),
+                                         "base-flow-conflict");
+        }
+        is_self_cleaning = true;
+        to_preparing_flat = 2;
+        system_auto_water_navigation_cancel();
+        if (!navigate_to_screen(UI_SCREEN_PREPARING))
+        {
+            is_self_cleaning = false;
+            to_preparing_flat = 0;
+            system_base_flow_finish(SYSTEM_BASE_FLOW_SELF_CLEANING,
+                                    "voice-clean-page-failed");
+            return system_voice_decision(SYSTEM_COMMAND_INTERLOCK_REJECTED,
+                                         "BASE", "IDLE",
+                                         "page-navigation-failed");
+        }
+        return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
+                                     "BASE", "SELF_CLEANING", "accepted");
+    case VOICE_COMMAND_CLEAN_STOP:
+        if (g_base_flow != SYSTEM_BASE_FLOW_SELF_CLEANING)
+        {
+            return system_voice_decision(SYSTEM_COMMAND_INTERLOCK_REJECTED,
+                                         "BASE",
+                                         system_base_flow_name(g_base_flow),
+                                         "self-clean-not-active");
+        }
+        system_voice_stop_self_clean();
+        serial_base_standby();
+        (void)navigate_to_screen(UI_SCREEN_INDEX);
+        return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
+                                     "BASE", "IDLE", "accepted");
+    default:
+        return system_voice_decision(SYSTEM_COMMAND_INTERLOCK_REJECTED,
+                                     "COMMAND", "UNSUPPORTED",
+                                     "unsupported-command");
+    }
+}
+
+// 点击模式按钮后，应用该模式的设置
 void apply_mode_to_runtime(lv_event_t *e)
 {
     if (e == NULL)
@@ -2262,11 +2840,12 @@ void apply_mode_to_runtime(lv_event_t *e)
 
 
     int mode_index = (int)(uintptr_t)lv_event_get_user_data(e);
-    if (mode_index >= g_mode_count)
+    if (mode_index < 0 || mode_index >= (int)g_mode_count)
     {
         return;
     }
 
+    current_selected_mode_index = mode_index;
     const system_mode_t *mode = &g_mode_settings[mode_index];
     if (mode == NULL)
     {
@@ -2284,8 +2863,6 @@ void apply_mode_to_runtime(lv_event_t *e)
     use_drug1 = mode->use_drug1;
     use_drug2 = mode->use_drug2;
 
-    current_temp = 0;
-
     //修改temp_value的显示值
     update_temp_set(&guider_ui);
 
@@ -2294,6 +2871,94 @@ void apply_mode_to_runtime(lv_event_t *e)
 
     apply_water_level_ui(water_level);
     apply_use_drug_ui(use_drug1, use_drug2);
+}
+
+static void liquid_shortage_build_text(uint8_t shortage_mask,
+                                       char *text,
+                                       size_t text_size)
+{
+    static const uint8_t shortage_bits[] =
+    {
+        SERIAL_LIQUID_SHORTAGE_DRUG1,
+        SERIAL_LIQUID_SHORTAGE_DRUG2,
+        SERIAL_LIQUID_SHORTAGE_CLEAN,
+    };
+    size_t used;
+    size_t index;
+    bool has_number = false;
+
+    if (text == NULL || text_size == 0u)
+    {
+        return;
+    }
+
+    used = (size_t)snprintf(text, text_size, "药液");
+    for (index = 0u;
+            index < sizeof(shortage_bits) / sizeof(shortage_bits[0]);
+            ++index)
+    {
+        int written;
+
+        if ((shortage_mask & shortage_bits[index]) == 0u)
+        {
+            continue;
+        }
+        written = snprintf(text + used,
+                           text_size - used,
+                           "%s%u",
+                           has_number ? "、" : "",
+                           (unsigned int)(index + 1u));
+        if (written < 0 || (size_t)written >= text_size - used)
+        {
+            text[text_size - 1u] = '\0';
+            return;
+        }
+        used += (size_t)written;
+        has_number = true;
+    }
+    (void)snprintf(text + used, text_size - used, "缺液");
+}
+
+static void system_ui_apply_liquid_shortage(uint8_t shortage_mask)
+{
+    lv_obj_t *icon = guider_ui.index_img_need_liquid;
+    lv_obj_t *label = guider_ui.index_label_need_liquid;
+    char text[32];
+
+    if (icon == NULL || label == NULL ||
+            !lv_obj_is_valid(icon) || !lv_obj_is_valid(label))
+    {
+        return;
+    }
+
+    shortage_mask &= SERIAL_LIQUID_SHORTAGE_MASK;
+    if (shortage_mask == 0u)
+    {
+        lv_obj_add_flag(icon, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    liquid_shortage_build_text(shortage_mask, text, sizeof(text));
+    lv_obj_set_style_text_font(label,
+                               custom_get_compact_dynamic_text_font(),
+                               LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_label_set_text(label, text);
+    lv_obj_remove_flag(icon, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(label, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void system_ui_apply_liquid_shortage_async(void *user_data)
+{
+    uint8_t shortage_mask = (uint8_t)(uintptr_t)user_data;
+
+    system_ui_apply_liquid_shortage(shortage_mask);
+}
+
+void system_ui_schedule_liquid_shortage(uint8_t shortage_mask)
+{
+    lv_async_call(system_ui_apply_liquid_shortage_async,
+                  (void *)(uintptr_t)(shortage_mask));
 }
 
 void index_page_init(lv_ui *ui)
@@ -2305,6 +2970,7 @@ void index_page_init(lv_ui *ui)
 
     //刷新温度显示
     update_temp_set(ui);
+    system_ui_apply_liquid_shortage(serial_mcu_liquid_shortage_mask());
 
     // 清空控件容器，避免重复添加
     if (ui->index_cont_1 != NULL)
@@ -2665,11 +3331,11 @@ static void preparing_wait_link_timer_cb(lv_timer_t *timer)
         g_wait_link_retry_count = 0;
         /* 跳转到index页面 */
         navigate_to_screen(UI_SCREEN_INDEX);
-        /* 1小时内没有点首页任何按钮的话，自动排水 */
-        g_auto_drain_timer = lv_timer_create_basic();
-        lv_timer_set_period(g_auto_drain_timer, 36000);
-        lv_timer_set_repeat_count(g_auto_drain_timer, 1);
-        lv_timer_set_cb(g_auto_drain_timer, auto_drain_timer_cb);
+        /* 1小时内没有点首页任何按钮的话，自动排水 可能app点击 */
+        // g_auto_drain_timer = lv_timer_create_basic();
+        // lv_timer_set_period(g_auto_drain_timer, 36000);
+        // lv_timer_set_repeat_count(g_auto_drain_timer, 1);
+        // lv_timer_set_cb(g_auto_drain_timer, auto_drain_timer_cb);
         return;
     }
 
@@ -2680,10 +3346,11 @@ static void preparing_wait_link_timer_cb(lv_timer_t *timer)
         lv_timer_delete(timer);
         g_wait_link_retry_count = 0;
         navigate_to_screen(UI_SCREEN_INDEX);
-        g_auto_drain_timer = lv_timer_create_basic();
-        lv_timer_set_period(g_auto_drain_timer, 36000);
-        lv_timer_set_repeat_count(g_auto_drain_timer, 1);
-        lv_timer_set_cb(g_auto_drain_timer, auto_drain_timer_cb);
+        /* 1小时内没有点首页任何按钮的话，自动排水 可能app点击 */
+        // g_auto_drain_timer = lv_timer_create_basic();
+        // lv_timer_set_period(g_auto_drain_timer, 36000);
+        // lv_timer_set_repeat_count(g_auto_drain_timer, 1);
+        // lv_timer_set_cb(g_auto_drain_timer, auto_drain_timer_cb);
         return;
     }
 }
@@ -2697,6 +3364,14 @@ void preparing_move_finished(lv_timer_t *timer)
     }
 
     //显示cont_move_finished
+    lv_obj_set_style_text_font(ui->preparing_label_17,
+                               &lv_font_SourceHanSansSC_Regular_40,
+                               LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui->preparing_label_timer_tips,
+                               &lv_font_SourceHanSansSC_Regular_30,
+                               LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_label_set_text(ui->preparing_label_17, "已到达指定位置");
+    lv_label_set_text(ui->preparing_label_timer_tips, "(5s后享受健康足疗)");
     lv_obj_clear_flag(ui->preparing_cont_move_finished, LV_OBJ_FLAG_HIDDEN);
     //隐藏  cont_moving
     lv_obj_add_flag(ui->preparing_cont_moving, LV_OBJ_FLAG_HIDDEN);
@@ -2708,11 +3383,11 @@ void preparing_move_finished(lv_timer_t *timer)
         {
             //已经连接上基站，直接跳转到index页面
             navigate_to_screen(UI_SCREEN_INDEX);
-            //1小时内，没有点首页任何按钮的话，自动排水
-            g_auto_drain_timer = lv_timer_create_basic();
-            lv_timer_set_period(g_auto_drain_timer, 36000); // 1小时
-            lv_timer_set_repeat_count(g_auto_drain_timer, 1);
-            lv_timer_set_cb(g_auto_drain_timer, auto_drain_timer_cb);
+            //1小时内，没有点首页任何按钮的话，自动排水 可能app点击
+            // g_auto_drain_timer = lv_timer_create_basic();
+            // lv_timer_set_period(g_auto_drain_timer, 60 * 60 * 1000); // 1小时
+            // lv_timer_set_repeat_count(g_auto_drain_timer, 1);
+            // lv_timer_set_cb(g_auto_drain_timer, auto_drain_timer_cb);
             return;
         }
         else
@@ -2757,6 +3432,26 @@ static void refresh_auto_water_status(lv_timer_t *timer)
     {
         lv_label_set_text(ui->preparing_preparing_tips,
                           "注水已完成，请尽快取出，\n享受健康足疗");
+        if (auto_water_navigation_flow_observe(
+                    &g_auto_water_navigation,
+                    base_main_status,
+                    serial_mcu_status_report_sequence()))
+        {
+            const char *target_name =
+                auto_water_navigation_flow_target(&g_auto_water_navigation);
+            int target_location_index = g_auto_water_target_location_index;
+
+            if (g_preparing_page_timer == timer)
+            {
+                g_preparing_page_timer = NULL;
+            }
+            lv_timer_delete(timer);
+            system_base_flow_finish(SYSTEM_BASE_FLOW_WATERING,
+                                    "water-complete");
+            (void)system_start_navigation(ui->preparing, target_name,
+                                          target_location_index);
+            return;
+        }
     }
     else if (base_main_status == 3)
     {
@@ -2779,6 +3474,11 @@ void preparing_refresh_flat2(lv_timer_t *timer)
 void preparing_page_init(lv_ui *ui)
 {
     preparing_page_cleanup();
+    preparing_stop_button_set_hidden(false);
+    /* 恢复准备页默认卡片布局；自清洁分支会临时套用参考界面尺寸。 */
+    lv_obj_set_pos(ui->preparing_cont_1, 14, 59);
+    lv_obj_set_size(ui->preparing_cont_1, 574, 403);
+    lv_obj_set_style_radius(ui->preparing_cont_1, 50, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_add_flag(ui->preparing_cont_preparing, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(ui->preparing_cont_cleaning, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(ui->preparing_cont_moving, LV_OBJ_FLAG_HIDDEN);
@@ -2790,82 +3490,7 @@ void preparing_page_init(lv_ui *ui)
             lv_obj_add_event_cb(ui->preparing, preparing_screen_lifecycle_cb, LV_EVENT_SCREEN_UNLOAD_START,
                                 NULL);
             lv_obj_add_event_cb(ui->preparing, preparing_screen_lifecycle_cb, LV_EVENT_DELETE, NULL);
-
-            //这里初始化cont_cleaning页面
-
-            // 3. 创建“自动清洁”标题
-            // lv_obj_t *title = lv_label_create(ui->preparing_cont_cleaning);
-            // lv_label_set_text(title, "自动清洁");
-            // lv_obj_set_style_text_color(title, lv_color_hex(0x333333), 0);
-            // lv_obj_set_style_text_font(title, &lv_font_montserrat_16, 0); // 可根据需要调整字体
-            // lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
-
-            // // 4. 创建圆形进度条 (lv_arc)
-            // lv_obj_t *arc = lv_arc_create(ui->preparing_cont_cleaning);
-            // lv_arc_set_range(arc, 0, 100);
-            // lv_arc_set_value(arc, 0);
-            // lv_arc_set_bg_angles(arc, 0, 360);          // 全圆环
-            // lv_obj_set_size(arc, 150, 150);
-            // lv_obj_align(arc, LV_ALIGN_CENTER, 0, 0);
-
-            // // 定制圆弧样式（主色、背景色、线宽）
-            // lv_obj_set_style_arc_color(arc, lv_color_hex(0x2196F3), LV_PART_INDICATOR); // 蓝色
-            // lv_obj_set_style_arc_width(arc, 8, LV_PART_INDICATOR);
-            // lv_obj_set_style_arc_color(arc, lv_color_hex(0xE0E0E0), LV_PART_MAIN);      // 灰色背景
-            // lv_obj_set_style_arc_width(arc, 8, LV_PART_MAIN);
-            // // 圆角端点（可选）
-            // lv_arc_set_rounded(arc, true);
-
-            // // 5. 创建中心状态文字 (“排水中”)
-            // lv_obj_t *label_status = lv_label_create(ui->preparing_cont_cleaning);
-            // lv_label_set_text(label_status, "排水中");
-            // lv_obj_set_style_text_color(label_status, lv_color_hex(0x666666), 0);
-            // lv_obj_set_style_text_font(label_status, &lv_font_montserrat_14, 0);
-            // lv_obj_align_to(label_status, arc, LV_ALIGN_CENTER, 0, -15);
-
-            // // 6. 创建中心百分比数字 (“00”)
-            // lv_obj_t *label_percent = lv_label_create(ui->preparing_cont_cleaning);
-            // lv_label_set_text(label_percent, "00");
-            // lv_obj_set_style_text_color(label_percent, lv_color_hex(0x2196F3), 0);
-            // lv_obj_set_style_text_font(label_percent, &lv_font_montserrat_22, 0); // 大号数字
-            // lv_obj_align_to(label_percent, arc, LV_ALIGN_CENTER, 0, 20);
-
-            // // 7. 创建“流程进度”标签（位于圆弧下方）
-            // lv_obj_t *label_process = lv_label_create(ui->preparing_cont_cleaning);
-            // lv_label_set_text(label_process, "流程进度");
-            // lv_obj_set_style_text_color(label_process, lv_color_hex(0x999999), 0);
-            // lv_obj_set_style_text_font(label_process, &lv_font_montserrat_12, 0);
-            // lv_obj_align_to(label_process, arc, LV_ALIGN_BOTTOM_MID, 0, 25);
-
-            // // 8. 创建“停止”按钮
-            // lv_obj_t *btn = lv_btn_create(ui->preparing_cont_cleaning);
-            // lv_obj_set_size(btn, 80, 35);
-            // lv_obj_set_style_radius(btn, 20, 0);
-            // lv_obj_set_style_bg_color(btn, lv_color_hex(0xFF5722), 0); // 橙色
-            // lv_obj_set_style_shadow_width(btn, 4, 0);
-            // lv_obj_set_style_shadow_color(btn, lv_color_hex(0xCCCCCC), 0);
-            // lv_obj_align(btn, LV_ALIGN_BOTTOM_MID, 0, -15);
-
-            // lv_obj_t *btn_label = lv_label_create(btn);
-            // lv_label_set_text(btn_label, "停止");
-            // lv_obj_set_style_text_color(btn_label, lv_color_hex(0xFFFFFF), 0);
-            // lv_obj_center(btn_label);
-
-            // // 9. 为按钮添加点击事件（简单示例：重置进度）
-            // lv_obj_add_event_cb(btn, [](lv_event_t *e) {
-            //     lv_obj_t *arc = lv_event_get_user_data(e);
-            //     lv_arc_set_value(arc, 0);
-            //     // 同时更新文字
-            //     lv_label_set_text(lv_obj_get_parent(arc), "00"); // 这里简化，实际上需找到对应标签
-            //     // 建议使用全局结构体来管理，下面会给出完整示例
-            // }, LV_EVENT_CLICKED, arc);
-
-            // // 10. 保存控件引用到静态结构体（用于定时器更新）
-            // cleaning_ui.arc = arc;
-            // cleaning_ui.label_percent = label_percent;
-            // cleaning_ui.label_status = label_status;
         }
-        //_is_preparing_page_initialized = true;
     }
 
 
@@ -2873,10 +3498,12 @@ void preparing_page_init(lv_ui *ui)
     //1--注水中，2--自清洁中，3--移动中,4--返回基站中
     if (to_preparing_flat == 1)
     {
-        //添加定位按钮并定义事件
-        g_preparing_btn_location = imgbtn_create(ui->preparing_cont_3, &_local_RGB565A8_100x100, "定位",
-                                   0, 3, 170, 187);
-        lv_obj_add_event_cb(g_preparing_btn_location, preparing_to_location, LV_EVENT_ALL, ui);
+        if (g_base_flow != SYSTEM_BASE_FLOW_WATERING)
+        {
+            SYSTEM_MANAGER_LOG_WARN("准备页拒绝 B2: active=%s",
+                                    system_base_flow_name(g_base_flow));
+            return;
+        }
         //显示cont_preparing
         lv_obj_clear_flag(ui->preparing_cont_preparing, LV_OBJ_FLAG_HIDDEN);
         display_preparing_settings(ui);
@@ -2891,9 +3518,27 @@ void preparing_page_init(lv_ui *ui)
     }
     else if (to_preparing_flat == 2)
     {
+        if (g_base_flow != SYSTEM_BASE_FLOW_SELF_CLEANING)
+        {
+            SYSTEM_MANAGER_LOG_WARN("准备页拒绝 B3: active=%s",
+                                    system_base_flow_name(g_base_flow));
+            return;
+        }
         //显示cont_self_cleaning
+        lv_obj_set_pos(ui->preparing_cont_1, 24, 72);
+        lv_obj_set_size(ui->preparing_cont_1, 580, 390);
+        lv_obj_set_style_radius(ui->preparing_cont_1,
+                                34,
+                                LV_PART_MAIN | LV_STATE_DEFAULT);
         lv_obj_clear_flag(ui->preparing_cont_cleaning, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_pos(ui->preparing_cont_cleaning, 0, 0);
+        lv_obj_set_size(ui->preparing_cont_cleaning, 580, 390);
         lv_obj_add_flag(ui->preparing_label_clean_time_left, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(ui->preparing_label_9, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(ui->preparing_label_10, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(ui->preparing_cleaning_tips, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_pos(ui->preparing_img_3, 38, 16);
+        lv_obj_set_pos(ui->preparing_label_12, 128, 41);
 
         /* 将 preparing_cleaning_tips 的字体替换为自定义全量 30px CJK 字库，
          * 避免 GUI Guider 生成的子集字体(仅65个汉字)缺失运行时汉字而显示 □ */
@@ -2905,66 +3550,44 @@ void preparing_page_init(lv_ui *ui)
                                        LV_PART_MAIN | LV_STATE_DEFAULT);
         }
 
+        cleaning_animation_create(ui->preparing_cont_cleaning);
+        self_clean_flow_start(&g_self_clean_flow);
+
         g_preparing_page_timer = lv_timer_create_basic();
         lv_timer_set_period(g_preparing_page_timer, 1000);
         lv_timer_set_repeat_count(g_preparing_page_timer, -1);
         lv_timer_set_user_data(g_preparing_page_timer, ui);
         lv_timer_set_cb(g_preparing_page_timer, preparing_refresh_flat2);
-        //先做一次排水
-        serial_base_force_drain();
+        serial_base_auto_clean();
 
     }
     else if (to_preparing_flat == 3 || to_preparing_flat == 4)
     {
+        if (g_base_flow != SYSTEM_BASE_FLOW_MOVING)
+        {
+            SYSTEM_MANAGER_LOG_WARN("准备页拒绝移动: active=%s",
+                                    system_base_flow_name(g_base_flow));
+            return;
+        }
         //显示cont_moving
         lv_obj_clear_flag(ui->preparing_cont_moving, LV_OBJ_FLAG_HIDDEN);
-
-        /* ---- 机器人底盘导航逻辑 ---- */
-
-        robot_station_t target_station = {0};
-        int result;
 
         //如果是返回基站(to_preparing_flat==4)，尝试使用充电指令触发自动回充
         if (to_preparing_flat == 4)
         {
+            robot_station_t target_station = {0};
+            int result;
             SYSTEM_MANAGER_LOG_USER("发送回基站充电指令");
             result = app_manager_robot_return_to_base(&target_station);
             if (result != ROBOT_CHASSIS_OK)
             {
                 SYSTEM_MANAGER_LOG_ERROR("回仓失败，未配置有效充电基站: ret=%d",
                                          result);
-                show_message_dialog(ui->preparing,
-                                    "回仓失败: 未配置充电基站");
-                navigate_to_screen(UI_SCREEN_INDEX);
-                return;
-            }
-            g_nav_target_x = (float)target_station.x;
-            g_nav_target_y = (float)target_station.y;
-            g_nav_target_z = (float)target_station.z;
-        }
-        else
-        {
-            const system_location_t *location;
-
-            if (current_selected_location_index < 0 ||
-                    current_selected_location_index >= (int)g_location_count)
-            {
-                SYSTEM_MANAGER_LOG_ERROR("导航失败，站点索引非法: index=%d",
-                                         current_selected_location_index);
-                show_message_dialog(ui->preparing, "导航失败: 未选择目标站点");
-                navigate_to_screen(UI_SCREEN_INDEX);
-                return;
-            }
-            location = &g_location_settings[current_selected_location_index];
-            SYSTEM_MANAGER_LOG_USER("准备导航到站点: name=%s", location->name);
-            result = app_manager_robot_navigate(location->name,
-                                                &target_station);
-            if (result != ROBOT_CHASSIS_OK)
-            {
-                SYSTEM_MANAGER_LOG_ERROR("导航失败，未找到有效站点: name=%s ret=%d",
-                                         location->name, result);
-                show_message_dialog(ui->preparing, "导航失败: 未找到目标站点");
-                navigate_to_screen(UI_SCREEN_INDEX);
+                show_message_dialog_and_navigate(ui->preparing,
+                                                 "回仓失败: 未配置充电基站",
+                                                 UI_SCREEN_INDEX);
+                system_base_flow_finish(SYSTEM_BASE_FLOW_MOVING,
+                                        "return-base-failed");
                 return;
             }
             g_nav_target_x = (float)target_station.x;
@@ -3000,8 +3623,67 @@ void system_manager_init(lv_ui *ui)
 
     /* 初始首页已由 GUI Guider 创建，显式记录基站默认页面和方向。 */
     g_applied_link_status = LINK_STATUS_DOCKED;
+    g_base_flow = SYSTEM_BASE_FLOW_IDLE;
+    g_drying_active_reported = false;
     bucket_countdown_ensure_timer();
 
+    g_mcu_watchdog_last_sequence = serial_mcu_status_report_sequence();
+    g_mcu_watchdog_last_report_tick = lv_tick_get();
+    g_mcu_watchdog_outage_latched = false;
+    if (g_mcu_report_watchdog_timer == NULL)
+    {
+        g_mcu_report_watchdog_timer = lv_timer_create(
+                                          mcu_report_watchdog_timer_cb,
+                                          MCU_REPORT_WATCHDOG_PERIOD_MS,
+                                          NULL);
+    }
+
+}
+
+static void mcu_report_watchdog_timer_cb(lv_timer_t *timer)
+{
+    uint32_t report_sequence = serial_mcu_status_report_sequence();
+    uint32_t now_tick = lv_tick_get();
+    lv_obj_t *active_screen;
+
+    LV_UNUSED(timer);
+
+    if (report_sequence != g_mcu_watchdog_last_sequence)
+    {
+        g_mcu_watchdog_last_sequence = report_sequence;
+        g_mcu_watchdog_last_report_tick = now_tick;
+        g_mcu_watchdog_outage_latched = false;
+        if (g_base_flow == SYSTEM_BASE_FLOW_DRYING)
+        {
+            if (base_main_status == 15u)
+            {
+                g_drying_active_reported = true;
+            }
+            else if (g_drying_active_reported && base_main_status == 3u)
+            {
+                system_base_flow_finish(SYSTEM_BASE_FLOW_DRYING,
+                                        "drying-complete");
+            }
+        }
+        return;
+    }
+
+    if (g_mcu_watchdog_outage_latched ||
+            lv_tick_elaps(g_mcu_watchdog_last_report_tick) <
+            MCU_REPORT_TIMEOUT_MS)
+    {
+        return;
+    }
+
+    g_mcu_watchdog_outage_latched = true;
+    SYSTEM_MANAGER_LOG_ERROR("MCU未上报消息");
+    serial_base_standby();
+
+    active_screen = lv_screen_active();
+    if (active_screen != NULL)
+    {
+        show_message_dialog(active_screen, "设备状态异常，请回仓重启");
+    }
 }
 
 static void system_ui_apply_link_status(uint8_t link_status)
@@ -3555,67 +4237,62 @@ static void display_preparing_settings(lv_ui *ui)
 }
 static void update_self_cleaning_progress(lv_ui *ui)
 {
+    self_clean_flow_event_t event;
+
     if (ui == NULL)
     {
         return;
     }
-    if (ui->preparing_cleaning_tips == NULL)
+    if (!self_clean_flow_update(&g_self_clean_flow, base_main_status, &event))
     {
         return;
     }
 
-    //根据base_main_status的值显示不同的提示语
-    if (base_main_status == 4)
+    switch (event)
     {
-        lv_label_set_text(ui->preparing_cleaning_tips, "自动上水中");
-    }
-    else if (base_main_status == 5)
-    {
-        lv_label_set_text(ui->preparing_cleaning_tips, "注水完成保温中");
-    }
-    else if (base_main_status == 6)
-    {
-        lv_label_set_text(ui->preparing_cleaning_tips, "注水完成等待排水");
-    }
-    else if (base_main_status == 7)
-    {
-        lv_label_set_text(ui->preparing_cleaning_tips, "清洁喷淋中");
-    }
-    else if (base_main_status == 8)
-    {
-        lv_label_set_text(ui->preparing_cleaning_tips, "清洁排水");
-    }
-    else if (base_main_status == 9)
-    {
-        lv_label_set_text(ui->preparing_cleaning_tips, "清水喷淋中");
-    }
-    else if (base_main_status == 10)
-    {
-        lv_label_set_text(ui->preparing_cleaning_tips, "清洁排水");
-    }
-    else if (base_main_status == 11)
-    {
-        lv_label_set_text(ui->preparing_cleaning_tips, "清洁已完成，暖风烘干中");
-    }
-    else if (base_main_status == 12)
-    {
-        lv_label_set_text(ui->preparing_cleaning_tips, "排水中");
-    }
-    else if (base_main_status == 3)
-    {
-        if (g_is_draining)
+    case SELF_CLEAN_FLOW_EVENT_STAGE_1:
+        cleaning_animation_set_stage(1u);
+        break;
+    case SELF_CLEAN_FLOW_EVENT_STAGE_2:
+        cleaning_animation_set_stage(2u);
+        break;
+    case SELF_CLEAN_FLOW_EVENT_STAGE_3:
+        cleaning_animation_set_stage(3u);
+        break;
+    case SELF_CLEAN_FLOW_EVENT_STAGE_4:
+        cleaning_animation_set_stage(4u);
+        break;
+    case SELF_CLEAN_FLOW_EVENT_STAGE_5:
+        cleaning_animation_set_stage(5u);
+        break;
+    case SELF_CLEAN_FLOW_EVENT_COMPLETE:
+        is_self_cleaning = false;
+        system_base_flow_finish(SYSTEM_BASE_FLOW_SELF_CLEANING,
+                                "self-clean-complete");
+        if (g_preparing_page_timer != NULL)
         {
-            //排水完成，可以开始自清洁了
-            g_is_draining = false;
-            serial_base_auto_clean();
+            lv_timer_delete(g_preparing_page_timer);
+            g_preparing_page_timer = NULL;
         }
-        else
-        {
-            lv_label_set_text(ui->preparing_cleaning_tips, "待机");
-        }
-
+        cleaning_animation_cleanup();
+        lv_obj_add_flag(ui->preparing_cont_cleaning, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_text_font(ui->preparing_label_17,
+                                   custom_get_dynamic_text_font_30(),
+                                   LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_text_font(ui->preparing_label_timer_tips,
+                                   custom_get_dynamic_text_font_30(),
+                                   LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_label_set_text(ui->preparing_label_17, "自清洁已完成");
+        lv_label_set_text(ui->preparing_label_timer_tips,
+                          "设备已进入待机状态");
+        lv_obj_clear_flag(ui->preparing_cont_move_finished,
+                          LV_OBJ_FLAG_HIDDEN);
+        self_clean_finish_show(ui);
+        break;
+    case SELF_CLEAN_FLOW_EVENT_NONE:
+    default:
+        break;
     }
-
 }
 
 void working_plus_clicked(lv_event_t *e)
@@ -3674,6 +4351,8 @@ void working_timer_clicked(lv_event_t *e)
         break;
     }
 }
+
+// 按键控制恒温
 void working_constant_temperature_toggle(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
@@ -3704,6 +4383,8 @@ void working_constant_temperature_toggle(lv_event_t *e)
         bucket_temp_clear_edit(ui->working_label_temperature);
     }
 }
+
+// 按UV灯
 void working_sterilization_toggle(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
@@ -3728,6 +4409,8 @@ void working_sterilization_toggle(lv_event_t *e)
     }
     serial_bucket_uv();
 }
+
+// 设置按摩强度
 void working_massage_intensity_clicked(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);

@@ -19,4 +19,16 @@ add_executable(${PROJECT_NAME} ${SRCS})
 
 target_link_libraries(${PROJECT_NAME} PRIVATE robot_chassis)
 
-install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin)
+add_executable(robot_gateway_cli
+    tools/robot_gateway_cli.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../cJSON/cJSON.c
+)
+
+target_include_directories(robot_gateway_cli PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../cJSON
+)
+
+target_compile_options(robot_gateway_cli PRIVATE -std=c99 -Wall -Wextra -Werror)
+
+install(TARGETS ${PROJECT_NAME} robot_gateway_cli RUNTIME DESTINATION bin)

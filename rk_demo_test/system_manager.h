@@ -6,46 +6,82 @@
 #include <stdint.h>
 #include "lvgl.h"
 #include "gui_guider.h"
+#include "voice_command_service.h"
 
 #define SYSTEM_MODE_NAME_LEN 32
 #define SYSTEM_MODE_MAX_COUNT 16
 #define SYSTEM_LOCATION_NAME_LEN 32
 #define SYSTEM_LOCATION_MAX_COUNT 16
 
-typedef struct {
-	char name[SYSTEM_MODE_NAME_LEN];
-	int icon_id;
-	uint32_t time_sec;
-	uint8_t water_level;
-	int16_t temperature;
-	bool use_drug1;
-	bool use_drug2;
-	int position;
+typedef struct
+{
+    char name[SYSTEM_MODE_NAME_LEN];
+    int icon_id;
+    uint32_t time_sec;
+    uint8_t water_level;
+    int16_t temperature;
+    bool use_drug1;
+    bool use_drug2;
+    int position;
 } system_mode_t;
 
-typedef struct {
-	lv_coord_t x;
-	lv_coord_t y;
+typedef struct
+{
+    lv_coord_t x;
+    lv_coord_t y;
 } system_location_coord_t;
 
-typedef struct {
-	char name[SYSTEM_LOCATION_NAME_LEN];
-	int index;
-	int default_mode_index;
-	system_location_coord_t coord;
+typedef struct
+{
+    char name[SYSTEM_LOCATION_NAME_LEN];
+    int index;
+    int default_mode_index;
+    system_location_coord_t coord;
 } system_location_t;
+
+typedef enum
+{
+    SYSTEM_BASE_FLOW_IDLE = 0,
+    SYSTEM_BASE_FLOW_WATERING,
+    SYSTEM_BASE_FLOW_SELF_CLEANING,
+    SYSTEM_BASE_FLOW_DRYING,
+    SYSTEM_BASE_FLOW_MOVING
+} system_base_flow_t;
+
+typedef enum
+{
+    SYSTEM_BUCKET_STATE_NORMAL = 0,
+    SYSTEM_BUCKET_STATE_STANDBY,
+    SYSTEM_BUCKET_STATE_MOVING
+} system_bucket_state_t;
+
+typedef enum
+{
+    SYSTEM_COMMAND_ACCEPTED = 0,
+    SYSTEM_COMMAND_STATE_REJECTED,
+    SYSTEM_COMMAND_INTERLOCK_REJECTED
+} system_command_result_t;
+
+typedef struct
+{
+    system_command_result_t result;
+    const char *domain;
+    const char *state;
+    const char *reason;
+} system_command_decision_t;
 
 extern system_location_t g_location_settings[SYSTEM_LOCATION_MAX_COUNT];
 extern size_t g_location_count;
 extern int current_selected_location_index;
 
 /** 模式属性 */
-extern int16_t last_link_status; /* 最近一次连接状态: 0x00=基站和桶已断开, 0x01=基站和桶已连接 */
-extern bool has_mcu_status_report; /* 是否已收到有效 MCU 状态帧，避免默认 LINK_STATUS 误触发页面切换 */
+extern int16_t
+last_link_status; /* 最近一次连接状态: 0x00=基站和桶已断开, 0x01=基站和桶已连接 */
+extern bool
+has_mcu_status_report; /* 是否已收到有效 MCU 状态帧，避免默认 LINK_STATUS 误触发页面切换 */
 extern int16_t temp_set; /* 温度设置值，单位 °C（可用乘 100 的整数表示） */
 extern uint32_t timer_set; /* 定时设置值，单位 sec */
 extern uint32_t remaining_seconds; /* 桶体本地倒计时剩余秒数，不参与A6编码 */
-extern int16_t current_temp; /* 桶体离开基站后的实际温度，单位 °C */
 extern int16_t current_water_level; /* 当前水位，范围 0-3 */
 extern int water_level;   /* 目标水位挡位，范围 0-3 */
 extern bool use_drug1;          /* 是否使用药物1 */
@@ -79,7 +115,6 @@ extern bool _is_preparing_page_initialized;
 extern lv_timer_t *g_auto_drain_timer;
 
 /**全局变量，记录是否正在排水 */
-extern bool g_is_draining;
 
 size_t system_mode_get_count(void);
 extern int current_selected_mode_index;
@@ -92,11 +127,24 @@ int system_location_save();
 // 初始化 系统管理模块
 void system_manager_init(lv_ui *ui);
 void system_ui_schedule_link_status(uint8_t link_status);
-//	将指定模式的设置应用到当前运行时环境
+void system_ui_schedule_liquid_shortage(uint8_t shortage_mask);
+//  将指定模式的设置应用到当前运行时环境
 void apply_mode_to_runtime(lv_event_t *e);
 
 //定位页面点击定位按钮
 void location_grid_btn_clicked(lv_event_t *e);
+int system_start_selected_location_navigation(lv_obj_t *dialog_parent);
+void system_auto_water_navigation_arm(void);
+void system_auto_water_navigation_cancel(void);
+void system_self_clean_stop_confirmed(void);
+bool system_base_flow_try_start(system_base_flow_t flow, const char *source);
+void system_base_flow_finish(system_base_flow_t expected, const char *source);
+system_base_flow_t system_base_flow_get(void);
+const char *system_base_flow_name(system_base_flow_t flow);
+system_bucket_state_t system_bucket_state_get(void);
+const char *system_bucket_state_name(system_bucket_state_t state);
+/* 仅在 LVGL 线程调用；完成位置与流程门禁后执行语音业务命令。 */
+system_command_decision_t system_voice_command_execute(voice_command_t command);
 
 //首页，根据当前模式设置载如模式按钮，并定义模式按钮事件，加载完模式按钮后，增加自清洁，药浴1,药浴2,定位，设置5个按钮
 void index_page_init(lv_ui *ui);

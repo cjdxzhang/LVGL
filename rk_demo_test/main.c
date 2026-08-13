@@ -28,8 +28,8 @@ int main(int argc, char **argv)
     signal(SIGINT, sigterm_handler);
     signal(SIGTERM, sigterm_handler);
 
-    /* 桶体开机默认位于基站，屏幕物理朝向对应 180°。 */
-    lv_port_init(0, 0, 180);
+    /* 桶体开机默认位于基站，屏幕物理朝向对应 0°。 */
+    lv_port_init(0, 0, 0);
     setup_ui(&guider_ui);
 
     while (!quit)

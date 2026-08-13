@@ -2,6 +2,7 @@ add_library(robot_chassis STATIC
     robot_chassis_module.c
     robot_chassis_framer.c
     robot_chassis_client.c
+    robot_chassis_log.c
     robot_chassis_queue.c
     robot_chassis_transaction.c
     robot_chassis_parser.c

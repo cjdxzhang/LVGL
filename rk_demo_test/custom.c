@@ -10,6 +10,7 @@
  * 包含所有运行时中文文本所需的汉字（上、等、待、排、喷、淋、机等），
  * 避免 GUI Guider 子集字体缺失汉字显示为方框(□)。 */
 LV_FONT_DECLARE(lv_font_custom_cjk_30)
+LV_FONT_DECLARE(lv_font_custom_punctuation_18)
 
 static lv_font_t g_dynamic_text_font_18;
 static lv_font_t g_dynamic_text_font_25;
@@ -17,9 +18,11 @@ static lv_font_t g_dynamic_text_font_30;
 static const lv_font_t *g_small_text_font = &lv_font_SourceHanSansSC_Regular_25;
 static bool g_custom_fonts_ready = false;
 
-static void custom_prepare_runtime_font(lv_font_t *font_copy, const lv_font_t *source_font, const lv_font_t *fallback_font)
+static void custom_prepare_runtime_font(lv_font_t *font_copy, const lv_font_t *source_font,
+                                        const lv_font_t *fallback_font)
 {
-    if (font_copy == NULL || source_font == NULL) {
+    if (font_copy == NULL || source_font == NULL)
+    {
         return;
     }
 
@@ -29,7 +32,8 @@ static void custom_prepare_runtime_font(lv_font_t *font_copy, const lv_font_t *s
 
 static void custom_prepare_fonts(void)
 {
-    if (g_custom_fonts_ready) {
+    if (g_custom_fonts_ready)
+    {
         return;
     }
 
@@ -37,8 +41,11 @@ static void custom_prepare_fonts(void)
      * GUI Guider exported multiple SourceHan subsets with different glyph coverage.
      * Use the broad-coverage 18/25 px fonts for any runtime Chinese text.
      */
-    custom_prepare_runtime_font(&g_dynamic_text_font_18, &lv_font_SourceHanSansSC_Regular_18, NULL);
-    custom_prepare_runtime_font(&g_dynamic_text_font_25, &lv_font_SourceHanSansSC_Regular_25, &g_dynamic_text_font_18);
+    custom_prepare_runtime_font(&g_dynamic_text_font_18,
+                                &lv_font_SourceHanSansSC_Regular_18,
+                                &lv_font_custom_punctuation_18);
+    custom_prepare_runtime_font(&g_dynamic_text_font_25, &lv_font_SourceHanSansSC_Regular_25,
+                                &g_dynamic_text_font_18);
 
     /*
      * 自定义 30px 字库 (custom/lv_font_custom_cjk_30.c) 由 NotoSansCJKSC-Regular 生成，
@@ -57,19 +64,22 @@ static void custom_prepare_fonts(void)
     g_custom_fonts_ready = true;
 }
 
-void custom_init(lv_ui *ui) {
+void custom_init(lv_ui *ui)
+{
     (void)ui;
     custom_prepare_fonts();
 }
 
-void custom_ui_init(lv_ui *ui) {
+void custom_ui_init(lv_ui *ui)
+{
     custom_prepare_fonts();
 
     // 应用管理器接管所有初始化工作
     app_manager_init(ui);
 }
 
-void custom_ui_load_scr_animation(lv_ui *ui, lv_obj_t **new_scr, bool new_scr_del, bool *old_scr_del,
+void custom_ui_load_scr_animation(lv_ui *ui, lv_obj_t **new_scr, bool new_scr_del,
+                                  bool *old_scr_del,
                                   ui_setup_scr_t setup_scr, lv_screen_load_anim_t anim_type,
                                   uint32_t time, uint32_t delay, bool is_clean, bool auto_del)
 {
@@ -80,12 +90,14 @@ void custom_ui_load_scr_animation(lv_ui *ui, lv_obj_t **new_scr, bool new_scr_de
 
 #if LV_USE_GUIDER_SIMULATOR && LV_USE_FREEMASTER
 #include "gg_external_data.h"
-    if (auto_del) {
+    if (auto_del)
+    {
         gg_edata_task_clear(act_scr);
     }
 #endif
 
-    if (new_scr_del) {
+    if (new_scr_del)
+    {
         setup_scr(ui);
     }
 
@@ -106,7 +118,8 @@ void custom_ui_load_scr_animation(lv_ui *ui, lv_obj_t **new_scr, bool new_scr_de
     *old_scr_del = false;
 }
 
-void __wrap_ui_load_scr_animation(lv_ui *ui, lv_obj_t **new_scr, bool new_scr_del, bool *old_scr_del,
+void __wrap_ui_load_scr_animation(lv_ui *ui, lv_obj_t **new_scr, bool new_scr_del,
+                                  bool *old_scr_del,
                                   ui_setup_scr_t setup_scr, lv_screen_load_anim_t anim_type,
                                   uint32_t time, uint32_t delay, bool is_clean, bool auto_del)
 {
@@ -138,16 +151,20 @@ const lv_font_t *custom_get_dynamic_text_font_30(void)
     return &g_dynamic_text_font_30;
 }
 
-int custom_save_wifi_info(const char *ssid, const char *psk) {
-    if (ssid == NULL || ssid[0] == '\0') {
+int custom_save_wifi_info(const char *ssid, const char *psk)
+{
+    if (ssid == NULL || ssid[0] == '\0')
+    {
         return -1;
     }
 
-    if (psk == NULL) {
+    if (psk == NULL)
+    {
         psk = "";
     }
 
-    if (wifi_manager_connect(ssid, psk) != 0) {
+    if (wifi_manager_connect(ssid, psk) != 0)
+    {
         return -1;
     }
 

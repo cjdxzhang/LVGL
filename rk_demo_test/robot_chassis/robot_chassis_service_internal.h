@@ -11,7 +11,8 @@
 #include "robot_chassis_transaction.h"
 #include "robot_chassis_upgrade_controller.h"
 
-typedef struct {
+typedef struct
+{
     bool initialized;
     bool running;
     bool thread_started;
@@ -36,8 +37,7 @@ uint64_t robot_chassis_service_now_ms(void);
 bool robot_chassis_service_is_running(void);
 void robot_chassis_service_notify_connection(void);
 void robot_chassis_service_disconnect(uint64_t now_ms);
-int robot_chassis_service_handle_frame(const char *json, size_t length,
-                                       void *user_data);
+int robot_chassis_service_handle_frame(const char *json, size_t length);
 void *robot_chassis_service_thread_main(void *argument);
 int robot_chassis_service_poll_mapping(uint64_t now_ms);
 int robot_chassis_service_handle_realtime_map(const char *json, size_t length);

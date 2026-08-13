@@ -41,6 +41,58 @@
 #include "wifi_manager.h"
 #include "custom_imgbtn.h"
 
+static lv_obj_t *g_preparing_stop_button = NULL;
+
+void preparing_stop_button_set_hidden(bool hidden)
+{
+    if (g_preparing_stop_button == NULL ||
+            !lv_obj_is_valid(g_preparing_stop_button))
+    {
+        g_preparing_stop_button = NULL;
+        return;
+    }
+
+    if (hidden)
+    {
+        lv_obj_add_flag(g_preparing_stop_button, LV_OBJ_FLAG_HIDDEN);
+    }
+    else
+    {
+        lv_obj_remove_flag(g_preparing_stop_button, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void preparing_apply_stop_button_layout(void)
+{
+    lv_obj_t *icon;
+    lv_obj_t *label;
+
+    if (g_preparing_stop_button == NULL ||
+            !lv_obj_is_valid(g_preparing_stop_button))
+    {
+        g_preparing_stop_button = NULL;
+        return;
+    }
+
+    icon = lv_obj_get_child(g_preparing_stop_button, 0);
+    label = lv_obj_get_child(g_preparing_stop_button, 1);
+
+    lv_obj_set_pos(g_preparing_stop_button, 0, 215);
+    lv_obj_set_size(g_preparing_stop_button, 170, 187);
+    lv_obj_set_style_radius(g_preparing_stop_button, 20, 0);
+
+    if (icon != NULL && lv_obj_is_valid(icon))
+    {
+        lv_image_set_scale(icon, LV_SCALE_NONE);
+        lv_obj_align(icon, LV_ALIGN_CENTER, 0, -(187 / 6));
+    }
+    if (label != NULL && lv_obj_is_valid(label))
+    {
+        lv_obj_set_style_text_font(label, custom_get_small_text_font(), 0);
+        lv_obj_align(label, LV_ALIGN_CENTER, 0, 187 / 6);
+    }
+}
+
 static void conf_wifi_refresh_ssid_dropdown(lv_ui *ui)
 {
     char options[4096] = {0};
@@ -793,11 +845,14 @@ static void preparing_event_handler(lv_event_t *e)
                 lv_obj_set_style_shadow_color(ui->preparing_btn_no, lv_color_hex(0x000000), 0);
                 lv_obj_set_style_shadow_opa(ui->preparing_btn_no, LV_OPA_40, 0);
 
-                lv_obj_t *btn_stop = imgbtn_create(ui->preparing_cont_3, &_stop_RGB565A8_100x100, "停止", 0, 215,
-                                                   170, 187);
-                lv_obj_add_event_cb(btn_stop, stop_toast, LV_EVENT_ALL, ui);
+                g_preparing_stop_button = imgbtn_create(ui->preparing_cont_3,
+                                                        &_stop_RGB565A8_100x100,
+                                                        "停止",
+                                                        0, 215, 170, 187);
+                lv_obj_add_event_cb(g_preparing_stop_button, stop_toast, LV_EVENT_ALL, ui);
                 _is_preparing_page_initialized = true;
             }
+            preparing_apply_stop_button_layout();
         }
         lv_label_set_text(guider_ui.preparing_preparing_tips, "");
         break;
@@ -829,6 +884,7 @@ static void preparing_btn_yes_event_handler(lv_event_t *e)
     {
     case LV_EVENT_CLICKED:
     {
+        system_self_clean_stop_confirmed();
         preparing_page_stop(e);
         lv_obj_add_flag(guider_ui.preparing_dialog1, LV_OBJ_FLAG_HIDDEN);
         break;

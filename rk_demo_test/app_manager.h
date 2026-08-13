@@ -23,10 +23,15 @@ void app_manager_deinit(void);
 
 /* App 通信线程收到单站点 JSON 后调用；本接口不操作 LVGL。 */
 int app_manager_robot_station_update_json(const char *json, size_t length);
+int app_manager_robot_resolve_navigation_target(const char *name,
+        robot_station_t *target);
+int app_manager_robot_submit_navigation_target(const robot_station_t *target);
 int app_manager_robot_navigate(const char *name, robot_station_t *target);
 int app_manager_robot_return_to_base(robot_station_t *target);
 int app_manager_robot_request_status(void);
 int app_manager_robot_get_status(robot_chassis_status_t *status);
+/* 启动地图备份，完成文件保存到 /mnt/udisk/<map_name>。 */
+int app_manager_robot_backup_map(const char *map_name);
 
 /**
  * 获取 ui 对象的全局指针（供其他模块访问控件时使用）

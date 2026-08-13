@@ -10,6 +10,7 @@
 
 #ifndef EVENTS_INIT_H_
 #define EVENTS_INIT_H_
+#include <stdbool.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -27,6 +28,7 @@ void events_init_conf_mode_detail(lv_ui *ui);
 void events_init_conf_wifi(lv_ui *ui);
 void events_init_conf_other(lv_ui *ui);
 void events_init_conf_location(lv_ui *ui);
+void preparing_stop_button_set_hidden(bool hidden);
 
 #ifdef __cplusplus
 }

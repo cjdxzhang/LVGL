@@ -1,7 +1,7 @@
 # 260721 底盘协议实施范围
 
 本目录以 robot_file/底盘接口260721.doc 为协议基线，并以
-openspec/changes/refactor-rk-demo-robot-chassis-v260721/ 中的设计决定消除原文歧义。
+openspec/changes/implement-robot-chassis/ 中的设计决定消除原文歧义。
 
 ## 传输规则
 
@@ -13,7 +13,7 @@ openspec/changes/refactor-rk-demo-robot-chassis-v260721/ 中的设计决定消�
 
 | 命令 | 请求关键载荷 | 响应/处理 |
 |---|---|---|
-| cmd=heatbeat | 无 p | 仅 cmd=heatbeat,result=true 是有效心跳 |
+| cmd=heatbeat | 无 p | 响应 JSON 的 cmd 严格等于 heatbeat 即判为有效心跳，不依赖 result |
 | cmd=reBoot | p:{} | 通用结果；调用前由 UI 确认 |
 | t=12 | p:{angle,speed} | 只提供接口，不接入现有业务 |
 | t=13 | p.data:{x,y,z,tolerance} | 去指定坐标 |
@@ -30,9 +30,8 @@ openspec/changes/refactor-rk-demo-robot-chassis-v260721/ 中的设计决定消�
 | t=90 | 无载荷 | 清除导航任务 |
 | t=109 | p:{} | 恢复出厂设置 |
 | t=1002 | p.data:{time} | 设置系统时间 |
-| t=1012/3007 | t=1012 的 p.data 为字符串化 {name}，3007 无载荷 | 十六进制地图备份分段，整包 MD5 |
+| t=1012/3007 | t=1012 的 p.data 为字符串化 {name}，3007 无载荷 | 十六进制地图备份分段；每段校验解码二进制 MD5，最终校验累计长度 |
 | t=3004~3006/3003 | 开始/分段/校验/解压 | 分段逐一确认，解压响应按 t=3003 |
 | t=10003 | p.data:{enable} | 轮子使能；禁用前由 UI 确认 |
 
 本期明确不实现 t=74 更新地图和 t=80 站点管理。其余文档命令也不暴露公共接口。
-
