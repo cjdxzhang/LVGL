@@ -87,6 +87,7 @@ static const voice_command_descriptor_t g_voice_commands[] =
     {VOICE_COMMAND_TEMP_DOWN, "CMD_TEMP_DOWN", "/usr/share/voice/temp_down.wav", VOICE_GATE_DETACHED},
     {VOICE_COMMAND_GO_HOME, "CMD_GO_HOME", NULL, VOICE_GATE_NONE},
     {VOICE_COMMAND_DRY_START, "CMD_DRY_START", "/usr/share/voice/dry_start.wav", VOICE_GATE_DOCKED},
+    {VOICE_COMMAND_DRY_STOP, "CMD_DRY_STOP", "/usr/share/voice/dry_stop.wav", VOICE_GATE_DOCKED},
     {VOICE_COMMAND_CLEAN_START, "CMD_CLEAN_START", "/usr/share/voice/clean_start.wav", VOICE_GATE_DOCKED},
     {VOICE_COMMAND_CLEAN_STOP, "CMD_CLEAN_STOP", "/usr/share/voice/clean_stop.wav", VOICE_GATE_DOCKED},
     {VOICE_COMMAND_STOP_ALL, "CMD_STOP_ALL", "/usr/share/voice/stop_all.wav", VOICE_GATE_AWAKE_ONLY},

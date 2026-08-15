@@ -2595,7 +2595,7 @@ void system_self_clean_stop_confirmed(void)
     to_preparing_flat = 0;
 }
 
-static void system_voice_stop_runtime(void)
+static bool system_voice_stop_runtime(void)
 {
     bool was_self_cleaning = to_preparing_flat == 2 ||
                              is_self_cleaning || g_self_clean_flow.active;
@@ -2621,6 +2621,8 @@ static void system_voice_stop_runtime(void)
         g_base_flow = SYSTEM_BASE_FLOW_IDLE;
         g_drying_active_reported = false;
     }
+
+    return was_self_cleaning;
 }
 
 static void system_voice_stop_self_clean(void)
@@ -2682,6 +2684,7 @@ static bool system_voice_is_detached_command(voice_command_t command)
 static bool system_voice_is_docked_command(voice_command_t command)
 {
     return command == VOICE_COMMAND_DRY_START ||
+           command == VOICE_COMMAND_DRY_STOP ||
            command == VOICE_COMMAND_CLEAN_START ||
            command == VOICE_COMMAND_CLEAN_STOP;
 }
@@ -2692,8 +2695,13 @@ system_command_decision_t system_voice_command_execute(voice_command_t command)
 
     if (command == VOICE_COMMAND_STOP_ALL)
     {
-        system_voice_stop_runtime();
+        bool was_self_cleaning = system_voice_stop_runtime();
+
         serial_base_standby();
+        if (was_self_cleaning)
+        {
+            (void)navigate_to_screen(UI_SCREEN_INDEX);
+        }
         return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
                                      "GLOBAL", "ANY", "accepted");
     }
@@ -2746,7 +2754,7 @@ system_command_decision_t system_voice_command_execute(voice_command_t command)
         return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
                                      "BUCKET", "NORMAL", "accepted");
     case VOICE_COMMAND_FOOTBATH_STOP:
-        system_voice_stop_runtime();
+        (void)system_voice_stop_runtime();
         serial_base_standby();
         return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
                                      "BUCKET", "NORMAL", "accepted");
@@ -2780,6 +2788,19 @@ system_command_decision_t system_voice_command_execute(voice_command_t command)
         serial_base_hot_dry(1u);
         return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
                                      "BASE", "DRYING", "accepted");
+    case VOICE_COMMAND_DRY_STOP:
+        if (g_base_flow != SYSTEM_BASE_FLOW_DRYING)
+        {
+            return system_voice_decision(SYSTEM_COMMAND_INTERLOCK_REJECTED,
+                                         "BASE",
+                                         system_base_flow_name(g_base_flow),
+                                         "drying-not-active");
+        }
+        serial_base_standby();
+        system_base_flow_finish(SYSTEM_BASE_FLOW_DRYING,
+                                "voice-dry-stop");
+        return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
+                                     "BASE", "IDLE", "accepted");
     case VOICE_COMMAND_CLEAN_START:
         if (!system_base_flow_try_start(SYSTEM_BASE_FLOW_SELF_CLEANING,
                                         "voice-clean-start"))
