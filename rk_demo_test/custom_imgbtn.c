@@ -478,8 +478,10 @@ void index_to_preparing(lv_event_t *e)
     {
         if (is_self_cleaning)
         {
-            if (!system_base_flow_try_start(SYSTEM_BASE_FLOW_SELF_CLEANING,
-                                            "index-clean-start"))
+            if (system_base_flow_request_start(
+                        SYSTEM_BASE_FLOW_SELF_CLEANING,
+                        SYSTEM_ACTION_SOURCE_UI).result !=
+                    SYSTEM_COMMAND_ACCEPTED)
             {
                 return;
             }
@@ -488,8 +490,10 @@ void index_to_preparing(lv_event_t *e)
         }
         else
         {
-            if (!system_base_flow_try_start(SYSTEM_BASE_FLOW_WATERING,
-                                            "index-water-start"))
+            if (system_base_flow_request_start(
+                        SYSTEM_BASE_FLOW_WATERING,
+                        SYSTEM_ACTION_SOURCE_UI).result !=
+                    SYSTEM_COMMAND_ACCEPTED)
             {
                 return;
             }
@@ -739,8 +743,9 @@ void cleaning_to_preparing(lv_event_t *e)
     {
     case LV_EVENT_CLICKED:
     {
-        if (!system_base_flow_try_start(SYSTEM_BASE_FLOW_SELF_CLEANING,
-                                        "cleaning-page-start"))
+        if (system_base_flow_request_start(
+                    SYSTEM_BASE_FLOW_SELF_CLEANING,
+                    SYSTEM_ACTION_SOURCE_UI).result != SYSTEM_COMMAND_ACCEPTED)
         {
             return;
         }

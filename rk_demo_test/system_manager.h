@@ -62,6 +62,13 @@ typedef enum
     SYSTEM_COMMAND_INTERLOCK_REJECTED
 } system_command_result_t;
 
+typedef enum
+{
+    SYSTEM_ACTION_SOURCE_UI = 0,
+    SYSTEM_ACTION_SOURCE_VOICE,
+    SYSTEM_ACTION_SOURCE_APP
+} system_action_source_t;
+
 typedef struct
 {
     system_command_result_t result;
@@ -145,6 +152,8 @@ void system_auto_water_navigation_arm(void);
 void system_auto_water_navigation_cancel(void);
 void system_self_clean_stop_confirmed(void);
 bool system_base_flow_try_start(system_base_flow_t flow, const char *source);
+system_command_decision_t system_base_flow_request_start(
+    system_base_flow_t flow, system_action_source_t source);
 void system_base_flow_finish(system_base_flow_t expected, const char *source);
 system_base_flow_t system_base_flow_get(void);
 const char *system_base_flow_name(system_base_flow_t flow);

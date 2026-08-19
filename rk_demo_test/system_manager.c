@@ -386,6 +386,21 @@ system_base_flow_t system_base_flow_get(void)
     return g_base_flow;
 }
 
+static const char *system_action_source_name(system_action_source_t source)
+{
+    switch (source)
+    {
+    case SYSTEM_ACTION_SOURCE_UI:
+        return "ui";
+    case SYSTEM_ACTION_SOURCE_VOICE:
+        return "voice";
+    case SYSTEM_ACTION_SOURCE_APP:
+        return "app";
+    default:
+        return "unknown";
+    }
+}
+
 bool system_base_flow_try_start(system_base_flow_t flow, const char *source)
 {
     if (flow == SYSTEM_BASE_FLOW_IDLE || g_base_flow != SYSTEM_BASE_FLOW_IDLE)
@@ -405,6 +420,54 @@ bool system_base_flow_try_start(system_base_flow_t flow, const char *source)
                             source == NULL ? "<unknown>" : source,
                             system_base_flow_name(flow));
     return true;
+}
+
+system_command_decision_t system_base_flow_request_start(
+    system_base_flow_t flow, system_action_source_t source)
+{
+    const char *source_name = system_action_source_name(source);
+    system_command_decision_t decision =
+    {
+        SYSTEM_COMMAND_ACCEPTED, "BASE", system_base_flow_name(flow), "accepted"
+    };
+
+    if (flow == SYSTEM_BASE_FLOW_IDLE)
+    {
+        decision.result = SYSTEM_COMMAND_STATE_REJECTED;
+        decision.state = "INVALID";
+        decision.reason = "invalid-flow";
+        return decision;
+    }
+    if (flow != SYSTEM_BASE_FLOW_MOVING && !has_mcu_status_report)
+    {
+        SYSTEM_MANAGER_LOG_WARN(
+            "基站流程启动被拒绝: source=%s request=%s reason=no-valid-mcu-status",
+            source_name, system_base_flow_name(flow));
+        decision.result = SYSTEM_COMMAND_STATE_REJECTED;
+        decision.domain = "POSITION";
+        decision.state = "UNKNOWN";
+        decision.reason = "no-valid-mcu-status";
+        return decision;
+    }
+    if (flow != SYSTEM_BASE_FLOW_MOVING &&
+            last_link_status != LINK_STATUS_DOCKED)
+    {
+        SYSTEM_MANAGER_LOG_WARN(
+            "基站流程启动被拒绝: source=%s request=%s reason=docked-required link=%d",
+            source_name, system_base_flow_name(flow), last_link_status);
+        decision.result = SYSTEM_COMMAND_STATE_REJECTED;
+        decision.domain = "POSITION";
+        decision.state = "DETACHED";
+        decision.reason = "docked-required";
+        return decision;
+    }
+    if (!system_base_flow_try_start(flow, source_name))
+    {
+        decision.result = SYSTEM_COMMAND_INTERLOCK_REJECTED;
+        decision.state = system_base_flow_name(g_base_flow);
+        decision.reason = "base-flow-conflict";
+    }
+    return decision;
 }
 
 // 释放当前基站流程占用，返回到空闲状态
@@ -2715,6 +2778,14 @@ static bool system_voice_is_docked_command(voice_command_t command)
            command == VOICE_COMMAND_CLEAN_STOP;
 }
 
+static bool system_voice_is_stop_command(voice_command_t command)
+{
+    return command == VOICE_COMMAND_FOOTBATH_STOP ||
+           command == VOICE_COMMAND_MASSAGE_STOP ||
+           command == VOICE_COMMAND_DRY_STOP ||
+           command == VOICE_COMMAND_CLEAN_STOP;
+}
+
 system_command_decision_t system_voice_command_execute(voice_command_t command)
 {
     system_bucket_state_t bucket_state;
@@ -2731,27 +2802,30 @@ system_command_decision_t system_voice_command_execute(voice_command_t command)
         return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
                                      "GLOBAL", "ANY", "accepted");
     }
-    if (!has_mcu_status_report)
+    if (!has_mcu_status_report && !system_voice_is_stop_command(command))
     {
         return system_voice_decision(SYSTEM_COMMAND_STATE_REJECTED,
                                      "POSITION", "UNKNOWN",
                                      "no-valid-mcu-status");
     }
-    if (system_voice_is_detached_command(command) &&
+    if (!system_voice_is_stop_command(command) &&
+            system_voice_is_detached_command(command) &&
             last_link_status != LINK_STATUS_DETACHED)
     {
         return system_voice_decision(SYSTEM_COMMAND_STATE_REJECTED,
                                      "POSITION", "DOCKED",
                                      "detached-required");
     }
-    if (system_voice_is_docked_command(command) &&
+    if (!system_voice_is_stop_command(command) &&
+            system_voice_is_docked_command(command) &&
             last_link_status != LINK_STATUS_DOCKED)
     {
         return system_voice_decision(SYSTEM_COMMAND_STATE_REJECTED,
                                      "POSITION", "DETACHED",
                                      "docked-required");
     }
-    if (system_voice_is_detached_command(command))
+    if (!system_voice_is_stop_command(command) &&
+            system_voice_is_detached_command(command))
     {
         bucket_state = system_bucket_state_get();
         if (bucket_state != SYSTEM_BUCKET_STATE_NORMAL)
@@ -2803,17 +2877,19 @@ system_command_decision_t system_voice_command_execute(voice_command_t command)
         return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
                                      "BUCKET", "NORMAL", "accepted");
     case VOICE_COMMAND_DRY_START:
-        if (!system_base_flow_try_start(SYSTEM_BASE_FLOW_DRYING,
-                                        "voice-dry-start"))
+    {
+        system_command_decision_t start_decision =
+            system_base_flow_request_start(SYSTEM_BASE_FLOW_DRYING,
+                                           SYSTEM_ACTION_SOURCE_VOICE);
+
+        if (start_decision.result != SYSTEM_COMMAND_ACCEPTED)
         {
-            return system_voice_decision(SYSTEM_COMMAND_INTERLOCK_REJECTED,
-                                         "BASE",
-                                         system_base_flow_name(g_base_flow),
-                                         "base-flow-conflict");
+            return start_decision;
         }
-        serial_base_hot_dry(1u);
-        return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
-                                     "BASE", "DRYING", "accepted");
+    }
+    serial_base_hot_dry(1u);
+    return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
+                                 "BASE", "DRYING", "accepted");
     case VOICE_COMMAND_DRY_STOP:
         if (g_base_flow != SYSTEM_BASE_FLOW_DRYING)
         {
@@ -2828,29 +2904,32 @@ system_command_decision_t system_voice_command_execute(voice_command_t command)
         return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
                                      "BASE", "IDLE", "accepted");
     case VOICE_COMMAND_CLEAN_START:
-        if (!system_base_flow_try_start(SYSTEM_BASE_FLOW_SELF_CLEANING,
-                                        "voice-clean-start"))
+    {
+        system_command_decision_t start_decision =
+            system_base_flow_request_start(
+                SYSTEM_BASE_FLOW_SELF_CLEANING,
+                SYSTEM_ACTION_SOURCE_VOICE);
+
+        if (start_decision.result != SYSTEM_COMMAND_ACCEPTED)
         {
-            return system_voice_decision(SYSTEM_COMMAND_INTERLOCK_REJECTED,
-                                         "BASE",
-                                         system_base_flow_name(g_base_flow),
-                                         "base-flow-conflict");
+            return start_decision;
         }
-        is_self_cleaning = true;
-        to_preparing_flat = 2;
-        system_auto_water_navigation_cancel();
-        if (!navigate_to_screen(UI_SCREEN_PREPARING))
-        {
-            is_self_cleaning = false;
-            to_preparing_flat = 0;
-            system_base_flow_finish(SYSTEM_BASE_FLOW_SELF_CLEANING,
-                                    "voice-clean-page-failed");
-            return system_voice_decision(SYSTEM_COMMAND_INTERLOCK_REJECTED,
-                                         "BASE", "IDLE",
-                                         "page-navigation-failed");
-        }
-        return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
-                                     "BASE", "SELF_CLEANING", "accepted");
+    }
+    is_self_cleaning = true;
+    to_preparing_flat = 2;
+    system_auto_water_navigation_cancel();
+    if (!navigate_to_screen(UI_SCREEN_PREPARING))
+    {
+        is_self_cleaning = false;
+        to_preparing_flat = 0;
+        system_base_flow_finish(SYSTEM_BASE_FLOW_SELF_CLEANING,
+                                "voice-clean-page-failed");
+        return system_voice_decision(SYSTEM_COMMAND_INTERLOCK_REJECTED,
+                                     "BASE", "IDLE",
+                                     "page-navigation-failed");
+    }
+    return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
+                                 "BASE", "SELF_CLEANING", "accepted");
     case VOICE_COMMAND_CLEAN_STOP:
         if (g_base_flow != SYSTEM_BASE_FLOW_SELF_CLEANING)
         {
@@ -3871,7 +3950,8 @@ void system_start_flow(void)
                               SYSTEM_BASE_FLOW_SELF_CLEANING :
                               SYSTEM_BASE_FLOW_WATERING;
 
-    if (!system_base_flow_try_start(flow, "tcp-start"))
+    if (system_base_flow_request_start(flow, SYSTEM_ACTION_SOURCE_APP).result !=
+            SYSTEM_COMMAND_ACCEPTED)
     {
         return;
     }
