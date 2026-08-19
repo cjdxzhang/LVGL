@@ -40,6 +40,8 @@ lv_obj_t *imgbtn_create(lv_obj_t *parent, const void *img_src, const char *text,
 lv_obj_t *imgbtn_create_without_bg(lv_obj_t *parent, const void *img_src, const char *text,
                                    lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h);
 bool navigate_to_screen(ui_screen_id_t target_screen);
+ui_screen_id_t get_current_screen_id(void);
+const char *get_current_screen_name(void);
 void setting_back(lv_event_t *e);
 /**  clicked事件，从setting->index **/
 void setting_to_index(lv_event_t *e);
@@ -102,8 +104,6 @@ void location_back(lv_event_t *e);
 void location_to_preparing(lv_event_t *e);
 /**  clicked事件，从location->preparing **/
 void location_return_to_preparing(lv_event_t *e);
-/**  clicked事件，从preparing->location **/
-void preparing_moving_to_location(lv_event_t *e);
 /**  clicked事件，从preparing->location **/
 void preparing_to_location(lv_event_t *e);
 

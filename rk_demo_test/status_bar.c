@@ -48,17 +48,8 @@ static void on_wifi_status_changed(bool connected, const char *ssid, void *user_
 // 时间更新定时器回调
 static void time_update_timer_cb(lv_timer_t *timer)
 {
-    robot_chassis_status_t status = {0};
-
     (void)timer;
     status_bar_update_time();
-
-    // if (app_manager_robot_get_status(&status) == ROBOT_CHASSIS_OK &&
-    //         (status.valid_fields &
-    //          ROBOT_CHASSIS_STATUS_VALID_BATTERY_PERCENT) != 0U)
-    // {
-    //     status_bar_update_battery((int)status.battery_percent);
-    // }
 }
 
 lv_obj_t *status_bar_create(lv_ui *ui)

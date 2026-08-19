@@ -884,9 +884,17 @@ static void preparing_btn_yes_event_handler(lv_event_t *e)
     {
     case LV_EVENT_CLICKED:
     {
-        system_self_clean_stop_confirmed();
-        preparing_page_stop(e);
+        // 隐藏弹窗
         lv_obj_add_flag(guider_ui.preparing_dialog1, LV_OBJ_FLAG_HIDDEN);
+        if (to_preparing_flat == 1)
+        {
+            auto_water_page_stop(e);
+        }
+        else if (to_preparing_flat == 2)
+        {
+            system_self_clean_stop_confirmed();
+            preparing_to_index(e);
+        }
         break;
     }
     default:

@@ -99,6 +99,10 @@ typedef struct
     uint8_t last_base_main_status;
     int16_t last_bucket_temp;
     uint64_t last_rx_ms;
+    uint8_t last_rx_frame[SERIAL_FRAME_LEN];
+    uint8_t last_tx_frame[SERIAL_FRAME_LEN];
+    bool has_last_rx_frame;
+    bool has_last_tx_frame;
     pthread_mutex_t tx_lock;
     pending_cmd_t cmd_queue[SERIAL_CMD_QUEUE_CAPACITY];
     size_t cmd_queue_head;
@@ -117,6 +121,10 @@ static serial_context_t g_serial =
     .last_base_main_status = 0x03u,
     .last_bucket_temp = 0,
     .last_rx_ms = 0u,
+    .last_rx_frame = {0},
+    .last_tx_frame = {0},
+    .has_last_rx_frame = false,
+    .has_last_tx_frame = false,
     .tx_lock = PTHREAD_MUTEX_INITIALIZER,
     .cmd_queue = {{0}},
     .cmd_queue_head = 0u,
@@ -495,6 +503,11 @@ static void update_runtime_state_from_rx(const uint8_t frame[SERIAL_FRAME_LEN])
     uint8_t liquid_shortage_mask;
     uint8_t previous_liquid_shortage_mask;
 
+    pthread_mutex_lock(&g_serial.tx_lock);
+    memcpy(g_serial.last_rx_frame, frame, SERIAL_FRAME_LEN);
+    g_serial.has_last_rx_frame = true;
+    pthread_mutex_unlock(&g_serial.tx_lock);
+
     bucket_main_status = frame[12];
     base_main_status = frame[23];
 
@@ -592,6 +605,11 @@ static void send_protocol_frame(void)
         SERIAL_LOG_WARN("write incomplete: %zd/%u", written, SERIAL_FRAME_LEN);
         return;
     }
+
+    pthread_mutex_lock(&g_serial.tx_lock);
+    memcpy(g_serial.last_tx_frame, frame, SERIAL_FRAME_LEN);
+    g_serial.has_last_tx_frame = true;
+    pthread_mutex_unlock(&g_serial.tx_lock);
 
     dump_hex("TX", frame, sizeof(frame));
 }
@@ -907,6 +925,20 @@ void serial_base_water(void)
     set_pending_cmd_with_base(CMD_BASE_WATER, LINK_MODE_BUCKET_BASE, base_data);
 }
 
+void serial_base_water_custom(uint8_t water_level_ui,
+                              uint8_t herb1_seconds,
+                              uint8_t herb2_seconds,
+                              uint8_t cleaner_seconds)
+{
+    uint8_t base_data[9] = {0};
+
+    base_data[0] = water_level_to_protocol((int)water_level_ui);
+    base_data[4] = herb1_seconds;
+    base_data[5] = herb2_seconds;
+    base_data[6] = cleaner_seconds;
+    set_pending_cmd_with_base(CMD_BASE_WATER, LINK_MODE_BUCKET_BASE, base_data);
+}
+
 void serial_base_auto_clean()
 {
     uint8_t base_data[9] = {0};
@@ -914,6 +946,55 @@ void serial_base_auto_clean()
     base_data[2] = 2;       // data[18] 清水喷淋时间(min)
     base_data[3] = 1;       // data[19] 烘干时间(x10min)
     set_pending_cmd_with_base(CMD_BASE_AUTO_CLEAN, LINK_MODE_BUCKET_BASE, base_data);
+}
+
+void serial_base_auto_clean_custom(uint8_t spray_hot_minutes,
+                                   uint8_t spray_cold_minutes,
+                                   uint8_t dry_time_x10min)
+{
+    uint8_t base_data[9] = {0};
+
+    base_data[1] = spray_hot_minutes;
+    base_data[2] = spray_cold_minutes;
+    base_data[3] = dry_time_x10min;
+    set_pending_cmd_with_base(CMD_BASE_AUTO_CLEAN, LINK_MODE_BUCKET_BASE,
+                              base_data);
+}
+
+bool serial_get_last_rx_frame(uint8_t frame_out[SERIAL_FRAME_LEN])
+{
+    bool valid;
+
+    if (frame_out == NULL)
+    {
+        return false;
+    }
+    pthread_mutex_lock(&g_serial.tx_lock);
+    valid = g_serial.has_last_rx_frame;
+    if (valid)
+    {
+        memcpy(frame_out, g_serial.last_rx_frame, SERIAL_FRAME_LEN);
+    }
+    pthread_mutex_unlock(&g_serial.tx_lock);
+    return valid;
+}
+
+bool serial_get_last_tx_frame(uint8_t frame_out[SERIAL_FRAME_LEN])
+{
+    bool valid;
+
+    if (frame_out == NULL)
+    {
+        return false;
+    }
+    pthread_mutex_lock(&g_serial.tx_lock);
+    valid = g_serial.has_last_tx_frame;
+    if (valid)
+    {
+        memcpy(frame_out, g_serial.last_tx_frame, SERIAL_FRAME_LEN);
+    }
+    pthread_mutex_unlock(&g_serial.tx_lock);
+    return valid;
 }
 
 void serial_base_force_drain(void)

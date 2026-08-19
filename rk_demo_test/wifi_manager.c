@@ -51,6 +51,71 @@ static pthread_mutex_t callback_mutex = PTHREAD_MUTEX_INITIALIZER;
 static char *ssid_list[50];
 static int ssid_count = 0;
 
+static int hex_digit_value(char ch)
+{
+    if (ch >= '0' && ch <= '9') return ch - '0';
+    if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+    if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+    return -1;
+}
+
+/*
+ * wpa_cli renders non-ASCII SSID bytes as \xHH in scan_results output.
+ * Restore those bytes before they enter the cache so LVGL receives UTF-8,
+ * while keeping the scan, selection and connection paths unchanged.
+ */
+static int decode_wpa_cli_ssid(const char *encoded, char *decoded, size_t decoded_size)
+{
+    size_t in_pos = 0;
+    size_t out_pos = 0;
+
+    if (encoded == NULL || decoded == NULL || decoded_size == 0)
+    {
+        return -1;
+    }
+
+    while (encoded[in_pos] != '\0')
+    {
+        unsigned char value;
+        int high;
+        int low;
+
+        /* A doubled slash represents one literal slash, not a hex escape. */
+        if (encoded[in_pos] == '\\' && encoded[in_pos + 1] == '\\')
+        {
+            if (out_pos + 1 >= decoded_size) return -1;
+            decoded[out_pos++] = '\\';
+            in_pos += 2;
+            continue;
+        }
+
+        if (encoded[in_pos] == '\\' && encoded[in_pos + 1] == 'x' &&
+                encoded[in_pos + 2] != '\0' && encoded[in_pos + 3] != '\0')
+        {
+            high = hex_digit_value(encoded[in_pos + 2]);
+            low = hex_digit_value(encoded[in_pos + 3]);
+            if (high >= 0 && low >= 0)
+            {
+                value = (unsigned char)((high << 4) | low);
+                /* Keep control-byte escapes textual; LVGL options use newlines as separators. */
+                if (value >= 0x20 && value != 0x7f)
+                {
+                    if (out_pos + 1 >= decoded_size) return -1;
+                    decoded[out_pos++] = (char)value;
+                    in_pos += 4;
+                    continue;
+                }
+            }
+        }
+
+        if (out_pos + 1 >= decoded_size) return -1;
+        decoded[out_pos++] = encoded[in_pos++];
+    }
+
+    decoded[out_pos] = '\0';
+    return 0;
+}
+
 static void clear_scan_results_locked(void)
 {
     for (int i = 0; i < ssid_count; i++)
@@ -328,14 +393,18 @@ static bool parse_wpa_status(const char *status, char *ssid, size_t ssid_size)
         else if (strncmp(line, "ssid=", strlen("ssid=")) == 0 &&
                  ssid != NULL && ssid_size > 0)
         {
-            size_t copy_len = line_len - strlen("ssid=");
+            const char *encoded_ssid = line + strlen("ssid=");
+            size_t encoded_len = line_len - strlen("ssid=");
+            char encoded_buffer[256] = {0};
 
-            if (copy_len >= ssid_size)
+            if (encoded_len < sizeof(encoded_buffer))
             {
-                copy_len = ssid_size - 1;
+                memcpy(encoded_buffer, encoded_ssid, encoded_len);
+                if (decode_wpa_cli_ssid(encoded_buffer, ssid, ssid_size) != 0)
+                {
+                    ssid[0] = '\0';
+                }
             }
-            memcpy(ssid, line + strlen("ssid="), copy_len);
-            ssid[copy_len] = '\0';
         }
 
         if (line_end == NULL)
@@ -573,12 +642,15 @@ int wifi_manager_scan_start(void)
         char *ssid_start = strrchr(line, '\t');
         if (ssid_start != NULL)
         {
+            char decoded_ssid[MAX_SSID_LEN];
+
             ssid_start++;
             char *ssid_end = strchr(ssid_start, '\n');
             if (ssid_end) *ssid_end = '\0';
-            if (strlen(ssid_start) > 0)
+            if (ssid_start[0] != '\0' &&
+                    decode_wpa_cli_ssid(ssid_start, decoded_ssid, sizeof(decoded_ssid)) == 0)
             {
-                ssid_list[ssid_count] = strdup(ssid_start);
+                ssid_list[ssid_count] = strdup(decoded_ssid);
                 if (ssid_list[ssid_count] != NULL)
                 {
                     ssid_count++;

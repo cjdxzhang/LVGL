@@ -119,6 +119,13 @@ extern lv_timer_t *g_auto_drain_timer;
 size_t system_mode_get_count(void);
 extern int current_selected_mode_index;
 const system_mode_t *system_mode_get(size_t index);
+int system_mode_apply_index(int mode_index);
+int16_t system_current_temp_get(void);
+void system_manager_refresh_current_page(void);
+void system_manager_refresh_ui(void);
+void system_start_flow(void);
+void system_select_self_clean(void);
+void system_stop_flow(void);
 
 
 
@@ -183,8 +190,8 @@ void apply_water_level_ui(int level);
 void apply_use_drug_ui(bool use_drug1, bool use_drug2);
 
 void preparing_page_cleanup(void);
-/**暂停工作，根据当前定位，返回到前一个页面 */
-void preparing_page_stop(lv_event_t *e);
+/**停止自动上水并返回首页。 */
+void auto_water_page_stop(lv_event_t *e);
 
 void working_bind_play_pause_buttons(lv_obj_t *pause_btn, lv_obj_t *play_btn);
 

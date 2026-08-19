@@ -252,6 +252,54 @@ bool navigate_to_screen(ui_screen_id_t target_screen)
     return true;
 }
 
+ui_screen_id_t get_current_screen_id(void)
+{
+    lv_obj_t *active_screen = lv_screen_active();
+
+    if (active_screen == guider_ui.setting) return UI_SCREEN_SETTING;
+    if (active_screen == guider_ui.preparing) return UI_SCREEN_PREPARING;
+    if (active_screen == guider_ui.location) return UI_SCREEN_LOCATION;
+    if (active_screen == guider_ui.working) return UI_SCREEN_WORKING;
+    if (active_screen == guider_ui.conf_advance) return UI_SCREEN_CONF_ADVANCE;
+    if (active_screen == guider_ui.conf_mode) return UI_SCREEN_CONF_MODE;
+    if (active_screen == guider_ui.conf_mode_detail) return UI_SCREEN_CONF_MODE_DETAIL;
+    if (active_screen == guider_ui.conf_wifi) return UI_SCREEN_CONF_WIFI;
+    if (active_screen == guider_ui.conf_other) return UI_SCREEN_CONF_OTHER;
+    if (active_screen == guider_ui.conf_location) return UI_SCREEN_CONF_LOCATION;
+    return UI_SCREEN_INDEX;
+}
+
+const char *get_current_screen_name(void)
+{
+    switch (get_current_screen_id())
+    {
+    case UI_SCREEN_INDEX:
+        return "index";
+    case UI_SCREEN_SETTING:
+        return "setting";
+    case UI_SCREEN_PREPARING:
+        return "preparing";
+    case UI_SCREEN_LOCATION:
+        return "location";
+    case UI_SCREEN_WORKING:
+        return "working";
+    case UI_SCREEN_CONF_ADVANCE:
+        return "conf_advance";
+    case UI_SCREEN_CONF_MODE:
+        return "conf_mode";
+    case UI_SCREEN_CONF_MODE_DETAIL:
+        return "conf_mode_detail";
+    case UI_SCREEN_CONF_WIFI:
+        return "conf_wifi";
+    case UI_SCREEN_CONF_OTHER:
+        return "conf_other";
+    case UI_SCREEN_CONF_LOCATION:
+        return "conf_location";
+    default:
+        return "unknown";
+    }
+}
+
 lv_obj_t *imgbtn_create(lv_obj_t *parent, const void *img_src, const char *text,
                         lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h)
 {

@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#define SERIAL_FRAME_LEN 30u
+
 #define SERIAL_LIQUID_SHORTAGE_DRUG1 0x01u
 #define SERIAL_LIQUID_SHORTAGE_DRUG2 0x02u
 #define SERIAL_LIQUID_SHORTAGE_CLEAN 0x04u
@@ -56,7 +58,14 @@ void serial_base_shutdown(void);                             // 0xB0 基站关�
 void serial_base_standby(void);                              // 0xB1 基站待机
 void serial_base_water(
     void);                                // 0xB2 自动注水（使用温度、水位全局变量）
+void serial_base_water_custom(uint8_t water_level_ui,
+                              uint8_t herb1_seconds,
+                              uint8_t herb2_seconds,
+                              uint8_t cleaner_seconds);
 void serial_base_auto_clean();                               // 0xB3 自清洁
+void serial_base_auto_clean_custom(uint8_t spray_hot_minutes,
+                                   uint8_t spray_cold_minutes,
+                                   uint8_t dry_time_x10min);
 
 
 void serial_base_force_drain(void);                          // 0xB4 强制排水
@@ -64,5 +73,7 @@ void serial_base_clean_spray(uint8_t minutes);               // 0xB5 清洁喷�
 void serial_base_clean_water_spray(uint8_t minutes);         // 0xB6 清水喷淋
 void serial_base_hot_dry(uint8_t time_x10min);               // 0xB7 热风烘干
 void serial_base_self_check(void);                           // 0xB8 基站自检
+bool serial_get_last_rx_frame(uint8_t frame_out[SERIAL_FRAME_LEN]);
+bool serial_get_last_tx_frame(uint8_t frame_out[SERIAL_FRAME_LEN]);
 
 #endif

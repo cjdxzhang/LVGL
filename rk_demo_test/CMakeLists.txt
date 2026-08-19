@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.8)
 
 project(rk_demo_test)
 
-add_subdirectory(robot_chassis)
+pkg_check_modules(DBUS REQUIRED dbus-1)
 
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -17,18 +17,8 @@ aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/images SRCS)
 
 add_executable(${PROJECT_NAME} ${SRCS})
 
-target_link_libraries(${PROJECT_NAME} PRIVATE robot_chassis)
+target_include_directories(${PROJECT_NAME} PRIVATE ${DBUS_INCLUDE_DIRS})
+target_compile_options(${PROJECT_NAME} PRIVATE ${DBUS_CFLAGS_OTHER})
+target_link_libraries(${PROJECT_NAME} PRIVATE ${DBUS_LIBRARIES})
 
-add_executable(robot_gateway_cli
-    tools/robot_gateway_cli.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/../cJSON/cJSON.c
-)
-
-target_include_directories(robot_gateway_cli PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/../cJSON
-)
-
-target_compile_options(robot_gateway_cli PRIVATE -std=c99 -Wall -Wextra -Werror)
-
-install(TARGETS ${PROJECT_NAME} robot_gateway_cli RUNTIME DESTINATION bin)
+install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin)
