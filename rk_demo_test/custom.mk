@@ -6,6 +6,7 @@ GEN_CSRCS += status_bar.c
 GEN_CSRCS += wifi_manager.c
 GEN_CSRCS += system_manager.c
 GEN_CSRCS += custom_imgbtn.c
+GEN_CSRCS += ui_label.c
 GEN_CSRCS += ble_manager.c
 GEN_CSRCS += ble_provisioning.c
 GEN_CSRCS += device_binding_config.c

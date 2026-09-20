@@ -15,6 +15,7 @@
 #include "custom.h"
 #include "custom_imgbtn.h"
 #include "system_manager.h"
+#include "ui_label.h"
 
 /*
  * working                              工作页根对象
@@ -108,6 +109,97 @@ void WorkPageInit(lv_ui *ui)
     lv_obj_t *btn_pause;
     lv_obj_t *btn_plus;
     lv_obj_t *btn_minus;
+    const ui_label_fixed_config_t time_left_config =
+    {
+        .x = 280,
+        .y = 35,
+        .width = 90,
+        .height = 32,
+        .style = {
+            .font = &lv_font_SourceHanSansSC_Regular_25,
+            .color = lv_color_hex(0xffffff),
+            .long_mode = LV_LABEL_LONG_WRAP,
+            .text_align = LV_TEXT_ALIGN_LEFT,
+        },
+    };
+    const ui_label_fixed_config_t temperature_config =
+    {
+        .x = 8,
+        .y = 56,
+        .width = 203,
+        .height = 80,
+        .style = {
+            .font = &lv_font_SourceHanSansSC_Regular_80,
+            .color = lv_color_hex(0xffffff),
+            .long_mode = LV_LABEL_LONG_WRAP,
+            .text_align = LV_TEXT_ALIGN_RIGHT,
+        },
+    };
+    const ui_label_fixed_config_t massage_title_config =
+    {
+        .x = 217,
+        .y = 84,
+        .width = 63,
+        .height = 32,
+        .style = {
+            .font = &lv_font_SourceHanSansSC_Regular_25,
+            .color = lv_color_hex(0xffffff),
+            .long_mode = LV_LABEL_LONG_WRAP,
+            .text_align = LV_TEXT_ALIGN_LEFT,
+        },
+    };
+    const ui_label_fixed_config_t time_title_config =
+    {
+        .x = 217,
+        .y = 35,
+        .width = 63,
+        .height = 32,
+        .style = {
+            .font = &lv_font_SourceHanSansSC_Regular_25,
+            .color = lv_color_hex(0xffffff),
+            .long_mode = LV_LABEL_LONG_WRAP,
+            .text_align = LV_TEXT_ALIGN_LEFT,
+        },
+    };
+    const ui_label_fixed_config_t return_title_config =
+    {
+        .x = 17,
+        .y = 55,
+        .width = 537,
+        .height = 40,
+        .style = {
+            .font = &lv_font_SourceHanSansSC_Regular_40,
+            .color = lv_color_hex(0xffffff),
+            .long_mode = LV_LABEL_LONG_WRAP,
+            .text_align = LV_TEXT_ALIGN_CENTER,
+        },
+    };
+    const ui_label_fixed_config_t return_warning_config =
+    {
+        .x = 13,
+        .y = 116,
+        .width = 537,
+        .height = 32,
+        .style = {
+            .font = &lv_font_SourceHanSansSC_Regular_25,
+            .color = lv_color_hex(0xffffff),
+            .long_mode = LV_LABEL_LONG_WRAP,
+            .text_align = LV_TEXT_ALIGN_CENTER,
+        },
+    };
+    const ui_label_button_config_t return_button_label_config =
+    {
+        .width = LV_PCT(100),
+        .align = LV_ALIGN_CENTER,
+        .x_offset = 0,
+        .y_offset = 0,
+        .style = {
+            .font = &lv_font_SourceHanSansSC_Regular_20,
+            .color = lv_color_hex(0xffffff),
+            .long_mode = LV_LABEL_LONG_WRAP,
+            .text_align = LV_TEXT_ALIGN_CENTER,
+        },
+    };
 
     // 工作页根对象
     ui->working = lv_obj_create(NULL);
@@ -146,29 +238,17 @@ void WorkPageInit(lv_ui *ui)
     lv_obj_set_style_shadow_width(ui->working_cont_playing, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
 
     // 剩余倒计时时间
-    ui->working_label_time_left = lv_label_create(ui->working_cont_playing);
-    lv_obj_set_pos(ui->working_label_time_left, 280, 35);
-    lv_obj_set_size(ui->working_label_time_left, 90, 32);
-    lv_label_set_text(ui->working_label_time_left, "10min");
-    lv_label_set_long_mode(ui->working_label_time_left, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_color(ui->working_label_time_left, lv_color_hex(0xffffff),
-                                LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->working_label_time_left, &lv_font_SourceHanSansSC_Regular_25,
-                               LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_opa(ui->working_label_time_left, 235, LV_PART_MAIN | LV_STATE_DEFAULT);
+    ui->working_label_time_left = ui_label_create_common(
+                                      ui->working_cont_playing, "10min", &time_left_config);
+    if (ui->working_label_time_left != NULL)
+    {
+        lv_obj_set_style_text_opa(ui->working_label_time_left, 235,
+                                  LV_PART_MAIN | LV_STATE_DEFAULT);
+    }
 
     // 当前温度数值
-    ui->working_label_temperature = lv_label_create(ui->working_cont_playing);
-    lv_obj_set_pos(ui->working_label_temperature, 8, 56);
-    lv_obj_set_size(ui->working_label_temperature, 203, 80);
-    lv_label_set_text(ui->working_label_temperature, "50℃");
-    lv_label_set_long_mode(ui->working_label_temperature, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_color(ui->working_label_temperature, lv_color_hex(0xffffff),
-                                LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->working_label_temperature, &lv_font_SourceHanSansSC_Regular_80,
-                               LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_align(ui->working_label_temperature, LV_TEXT_ALIGN_RIGHT,
-                                LV_PART_MAIN | LV_STATE_DEFAULT);
+    ui->working_label_temperature = ui_label_create_common(
+                                        ui->working_cont_playing, "50℃", &temperature_config);
 
     // 按摩状态图标
     ui->working_img_massage = lv_image_create(ui->working_cont_playing);
@@ -251,25 +331,17 @@ void WorkPageInit(lv_ui *ui)
     lv_obj_set_style_image_opa(ui->working_img_sterilization, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
 
     // “按摩”标题
-    ui->working_label_massage_title = lv_label_create(ui->working_cont_playing);
-    lv_obj_set_pos(ui->working_label_massage_title, 217, 84);
-    lv_obj_set_size(ui->working_label_massage_title, 63, 32);
-    lv_label_set_text(ui->working_label_massage_title, "按摩:");
-    lv_label_set_long_mode(ui->working_label_massage_title, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_color(ui->working_label_massage_title, lv_color_hex(0xffffff),
-                                LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->working_label_massage_title, &lv_font_SourceHanSansSC_Regular_25,
-                               LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_opa(ui->working_label_massage_title, 235, LV_PART_MAIN | LV_STATE_DEFAULT);
+    ui->working_label_massage_title = ui_label_create_common(
+                                          ui->working_cont_playing, "按摩:", &massage_title_config);
+    if (ui->working_label_massage_title != NULL)
+    {
+        lv_obj_set_style_text_opa(ui->working_label_massage_title, 235,
+                                  LV_PART_MAIN | LV_STATE_DEFAULT);
+    }
 
     // “时间”标题
-    ui->working_label_time_title = lv_label_create(ui->working_cont_playing);
-    lv_obj_set_pos(ui->working_label_time_title, 217, 35);
-    lv_obj_set_size(ui->working_label_time_title, 63, 32);
-    lv_label_set_text(ui->working_label_time_title, "时间:");
-    lv_label_set_long_mode(ui->working_label_time_title, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_color(ui->working_label_time_title, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(ui->working_label_time_title, &lv_font_SourceHanSansSC_Regular_25, 0);
+    ui->working_label_time_title = ui_label_create_common(
+                                       ui->working_cont_playing, "时间:", &time_title_config);
 
     // 左下基础控制区
     ui->working_cont_controls = lv_obj_create(ui->working);
@@ -360,30 +432,13 @@ void WorkPageInit(lv_ui *ui)
     lv_obj_set_style_shadow_width(ui->working_cont_return_dialog, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
 
     // 回仓确认标题
-    ui->working_label_return_title = lv_label_create(ui->working_cont_return_dialog);
-    lv_obj_set_pos(ui->working_label_return_title, 17, 55);
-    lv_obj_set_size(ui->working_label_return_title, 537, 40);
-    lv_label_set_text(ui->working_label_return_title, "是否返回基站？");
-    lv_label_set_long_mode(ui->working_label_return_title, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_color(ui->working_label_return_title, lv_color_hex(0xffffff),
-                                LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->working_label_return_title, &lv_font_SourceHanSansSC_Regular_40,
-                               LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_align(ui->working_label_return_title, LV_TEXT_ALIGN_CENTER,
-                                LV_PART_MAIN | LV_STATE_DEFAULT);
+    ui->working_label_return_title = ui_label_create_common(
+                                         ui->working_cont_return_dialog, "是否返回基站？", &return_title_config);
 
     // 回仓前安全提示
-    ui->working_label_return_warning = lv_label_create(ui->working_cont_return_dialog);
-    lv_obj_set_pos(ui->working_label_return_warning, 13, 116);
-    lv_obj_set_size(ui->working_label_return_warning, 537, 32);
-    lv_label_set_text(ui->working_label_return_warning, "启动前请确认已取出双脚");
-    lv_label_set_long_mode(ui->working_label_return_warning, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_color(ui->working_label_return_warning, lv_color_hex(0xffffff),
-                                LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->working_label_return_warning, &lv_font_SourceHanSansSC_Regular_25,
-                               LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_align(ui->working_label_return_warning, LV_TEXT_ALIGN_CENTER,
-                                LV_PART_MAIN | LV_STATE_DEFAULT);
+    ui->working_label_return_warning = ui_label_create_common(
+                                           ui->working_cont_return_dialog, "启动前请确认已取出双脚",
+                                           &return_warning_config);
 
     // 回仓确认“是”按钮
     ui->working_btn_yes = lv_button_create(ui->working_cont_return_dialog);
@@ -398,17 +453,8 @@ void WorkPageInit(lv_ui *ui)
     lv_obj_set_style_shadow_width(ui->working_btn_yes, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
 
     //回仓确认“是”按钮文字
-    ui->working_btn_yes_label = lv_label_create(ui->working_btn_yes);
-    lv_obj_set_width(ui->working_btn_yes_label, LV_PCT(100));
-    lv_label_set_text(ui->working_btn_yes_label, "是");
-    lv_label_set_long_mode(ui->working_btn_yes_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_color(ui->working_btn_yes_label, lv_color_hex(0xffffff),
-                                LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->working_btn_yes_label, &lv_font_SourceHanSansSC_Regular_20,
-                               LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_align(ui->working_btn_yes_label, LV_TEXT_ALIGN_CENTER,
-                                LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_align(ui->working_btn_yes_label, LV_ALIGN_CENTER, 0, 0);
+    ui->working_btn_yes_label = ui_label_create_button(
+                                    ui->working_btn_yes, "是", &return_button_label_config);
 
     // 回仓确认“否”按钮
     ui->working_btn_no = lv_button_create(ui->working_cont_return_dialog);
@@ -423,17 +469,8 @@ void WorkPageInit(lv_ui *ui)
     lv_obj_set_style_shadow_width(ui->working_btn_no, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
 
     // 回仓确认“否”按钮文字
-    ui->working_btn_no_label = lv_label_create(ui->working_btn_no);
-    lv_obj_set_width(ui->working_btn_no_label, LV_PCT(100));
-    lv_label_set_text(ui->working_btn_no_label, "否");
-    lv_label_set_long_mode(ui->working_btn_no_label, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_color(ui->working_btn_no_label, lv_color_hex(0xffffff),
-                                LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui->working_btn_no_label, &lv_font_SourceHanSansSC_Regular_20,
-                               LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_align(ui->working_btn_no_label, LV_TEXT_ALIGN_CENTER,
-                                LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_align(ui->working_btn_no_label, LV_ALIGN_CENTER, 0, 0);
+    ui->working_btn_no_label = ui_label_create_button(
+                                   ui->working_btn_no, "否", &return_button_label_config);
 
     index = 0;
     x_offset = (int)(index % 2) * (button_width + horizontal_spacing);
