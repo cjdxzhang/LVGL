@@ -1,5 +1,6 @@
 #include "tcp_service.h"
 
+#include "app_log.h"
 #include "serial.h"
 #include "system_manager.h"
 #include "robot_tcp.h"
@@ -7,6 +8,7 @@
 #include "device_binding_config.h"
 #include "custom_imgbtn.h"
 #include "cJSON.h"
+#include "robot_tcp.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -32,7 +34,8 @@
 typedef struct
 {
     int fd;
-    size_t rx_len;
+    bool is_proxy;
+    size_t rx_len; // 当前接收缓冲区中有效数据的长度
     char rx_buffer[TCP_SERVICE_RX_BUFFER_SIZE];
     struct sockaddr_in addr;
 } tcp_client_t;
@@ -65,6 +68,7 @@ enum
     ASYNC_CMD_START_FLOW,
     ASYNC_CMD_SELECT_SELF_CLEAN,
     ASYNC_CMD_STOP_FLOW,
+    ASYNC_CMD_STOP_BUCKET,
 };
 
 typedef struct
@@ -80,6 +84,77 @@ static tcp_service_context_t g_tcp_service =
     .initialized = false,
     .lock = PTHREAD_MUTEX_INITIALIZER,
 };
+
+static int send_json_response(int fd, cJSON *response);
+
+static robot_position_t g_robot_position =
+{
+    .x = 0.0,
+    .y = 0.0,
+    .z = 0.0,
+    .powquantity = 0,
+    .power = 0.0,
+    .velSpeed = 0.0,
+    .velAngle = 0.0,
+    .emgStop = 0,
+    .inbuildmap = false,
+    .innavmap = false,
+    .mapname = "",
+    .timestamp = "",
+};
+static pthread_mutex_t g_position_lock = PTHREAD_MUTEX_INITIALIZER;
+
+typedef struct
+{
+    bool pending;
+    int station_index;
+    bool return_base;
+} tcp_navigation_request_t;
+
+static tcp_navigation_request_t g_navigation_request =
+{
+    .pending = false,
+    .station_index = -1,
+};
+static pthread_mutex_t g_navigation_request_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int submit_navigation_request(int station_index)
+{
+    if (station_index < 0)
+    {
+        return -1;
+    }
+
+    pthread_mutex_lock(&g_navigation_request_lock);
+    g_navigation_request.return_base = false;
+    g_navigation_request.station_index = station_index;
+    g_navigation_request.pending = true;
+    pthread_mutex_unlock(&g_navigation_request_lock);
+    return 0;
+}
+
+static bool is_proxy_client_addr(const struct sockaddr_in *addr)
+{
+    return addr != NULL && ntohl(addr->sin_addr.s_addr) == INADDR_LOOPBACK;
+}
+
+static int request_proxy_stations_locked(int index)
+{
+    cJSON *request;
+
+    if (index < 0 || index >= TCP_SERVICE_MAX_CLIENTS || !g_tcp_service.clients[index].is_proxy)
+    {
+        return -1;
+    }
+
+    request = RobotTcp_BuildStationsQueryRequest();
+    if (request == NULL)
+    {
+        return -1;
+    }
+
+    return send_json_response(g_tcp_service.clients[index].fd, request);
+}
 
 static const char *bucket_status_to_string(uint8_t status)
 {
@@ -180,6 +255,7 @@ static int add_client_locked(int client_fd, const struct sockaddr_in *addr)
         if (g_tcp_service.clients[index].fd < 0)
         {
             g_tcp_service.clients[index].fd = client_fd;
+            g_tcp_service.clients[index].is_proxy = is_proxy_client_addr(addr);
             g_tcp_service.clients[index].rx_len = 0u;
             g_tcp_service.clients[index].rx_buffer[0] = '\0';
             if (addr != NULL)
@@ -210,6 +286,7 @@ static void remove_client_locked(int index)
     }
 
     g_tcp_service.clients[index].fd = -1;
+    g_tcp_service.clients[index].is_proxy = false;
     g_tcp_service.clients[index].rx_len = 0u;
     g_tcp_service.clients[index].rx_buffer[0] = '\0';
     memset(&g_tcp_service.clients[index].addr, 0, sizeof(g_tcp_service.clients[index].addr));
@@ -274,7 +351,18 @@ static cJSON *build_modes_json(void)
         cJSON_AddNumberToObject(item, "water_level", mode->water_level);
         cJSON_AddBoolToObject(item, "use_drug1", mode->use_drug1);
         cJSON_AddBoolToObject(item, "use_drug2", mode->use_drug2);
-        cJSON_AddNumberToObject(item, "position", mode->position);
+        int position = -1;
+        for (size_t location_index = 0; location_index < g_location_count; ++location_index)
+        {
+            if (strcmp(g_location_settings[location_index].name, mode->station_name) == 0)
+            {
+                position = (int)location_index;
+                break;
+            }
+        }
+        /* 旧客户端只读序号继续派生提供，模式绑定以名称为准。 */
+        cJSON_AddNumberToObject(item, "position", position);
+        cJSON_AddStringToObject(item, "station_name", mode->station_name);
         cJSON_AddItemToArray(array, item);
     }
 
@@ -491,7 +579,7 @@ static void async_ui_action_cb(void *user_data)
     {
         navigate_to_screen((ui_screen_id_t)action->int_value);
         /* 切换页面后刷新目标页面，保证外部修改的全局状态能同步显示 */
-        system_manager_refresh_current_page();
+        system_manager_refresh_ui();
     }
     else if (action->command == ASYNC_CMD_REFRESH_UI)
     {
@@ -510,8 +598,11 @@ static void async_ui_action_cb(void *user_data)
     }
     else if (action->command == ASYNC_CMD_STOP_FLOW)
     {
-        /* 停止并返回上一页 */
-        system_stop_flow();
+        system_active_flow_stop();
+    }
+    else if (action->command == ASYNC_CMD_STOP_BUCKET)
+    {
+        system_bucket_stop();
     }
 
     free(action);
@@ -535,21 +626,19 @@ static void async_serial_action_cb(void *user_data)
         serial_bucket_standby();
         break;
     case 0xA2:
-        serial_bucket_heat();
+        (void)system_bucket_heat_set(true);
         break;
     case 0xA3:
-        serial_bucket_stop_heat();
+        (void)system_bucket_heat_set(false);
         break;
     case 0xA4:
-        massage_intensity = clamp_u8_local(action->int_value, 0, 3);
-        serial_bucket_massage();
+        (void)system_bucket_massage_set(action->int_value);
         break;
     case 0xA5:
-        sterilization = (action->int_value != 0);
-        serial_bucket_uv();
+        (void)system_bucket_uv_set(action->int_value != 0);
         break;
     case 0xA6:
-        serial_bucket_timer();
+        system_bucket_timer_apply();
         break;
     case 0xA7:
         serial_bucket_stop_all();
@@ -580,9 +669,6 @@ static void async_serial_action_cb(void *user_data)
         break;
     case 0xB6:
         serial_base_clean_water_spray(action->arg0);
-        break;
-    case 0xB7:
-        serial_base_hot_dry(action->arg0);
         break;
     case 0xB8:
         serial_base_self_check();
@@ -806,9 +892,14 @@ static cJSON *handle_set_runtime(cJSON *payload, const char *request_id, const c
     bool maybe_constant = json_get_bool_default(payload, "constant_temperature", constant_temperature);
     bool maybe_uv = json_get_bool_default(payload, "sterilization", sterilization);
 
-    if (maybe_temp < 25 || maybe_temp > 50)
+    if (system_mcu_link_state_get() != SYSTEM_MCU_LINK_ONLINE)
     {
-        return make_error_response(request_id, cmd, "INVALID_TEMP", "temp_set 范围应为 25-50");
+        return make_error_response(request_id, cmd, "MCU_OFFLINE", "MCU链路未在线");
+    }
+
+    if (maybe_temp < 35 || maybe_temp > 48)
+    {
+        return make_error_response(request_id, cmd, "INVALID_TEMP", "temp_set 范围应为 35-48");
     }
     if (maybe_timer < 0 || maybe_timer > 86400)
     {
@@ -842,6 +933,11 @@ static cJSON *handle_apply_mode(cJSON *payload, const char *request_id, const ch
 {
     int mode_index = json_get_int_default(payload, "mode_index", -1);
 
+    if (system_mcu_link_state_get() != SYSTEM_MCU_LINK_ONLINE)
+    {
+        return make_error_response(request_id, cmd, "MCU_OFFLINE", "MCU链路未在线");
+    }
+
     if (system_mode_apply_index(mode_index) != 0)
     {
         return make_error_response(request_id, cmd, "INVALID_MODE", "mode_index 无效");
@@ -857,11 +953,31 @@ static cJSON *handle_apply_mode(cJSON *payload, const char *request_id, const ch
 static cJSON *handle_bucket_command(cJSON *payload, const char *request_id, const char *cmd)
 {
     const char *action = json_get_string(payload, "action");
+    cJSON *status_payload;
+    int target_value = 0;
     int ret = 0;
+    bool is_function_action;
+    bool has_function_target = false;
 
     if (action == NULL)
     {
         return make_error_response(request_id, cmd, "MISSING_ACTION", "缺少 action 字段");
+    }
+    if (system_mcu_link_state_get() != SYSTEM_MCU_LINK_ONLINE)
+    {
+        return make_error_response(request_id, cmd, "MCU_OFFLINE", "MCU链路未在线");
+    }
+    is_function_action = strcmp(action, "heat") == 0 ||
+                         strcmp(action, "stop_heat") == 0 ||
+                         strcmp(action, "massage") == 0 ||
+                         strcmp(action, "uv") == 0;
+    if (is_function_action &&
+            (last_link_status != 0x00 ||
+             system_bucket_state_get() != SYSTEM_BUCKET_STATE_NORMAL ||
+             system_base_flow_get() != SYSTEM_BASE_FLOW_IDLE))
+    {
+        return make_error_response(request_id, cmd, "BUCKET_STATE_CONFLICT",
+                                   "当前桶体状态不允许设置该功能");
     }
 
     if (strcmp(action, "shutdown") == 0)
@@ -874,21 +990,32 @@ static cJSON *handle_bucket_command(cJSON *payload, const char *request_id, cons
     }
     else if (strcmp(action, "heat") == 0)
     {
+        target_value = 1;
+        has_function_target = true;
         ret = schedule_serial_action(0xA2, 0, 0, 0, 0, 0);
     }
     else if (strcmp(action, "stop_heat") == 0)
     {
+        target_value = 0;
+        has_function_target = true;
         ret = schedule_serial_action(0xA3, 0, 0, 0, 0, 0);
     }
     else if (strcmp(action, "massage") == 0)
     {
-        ret = schedule_serial_action(0xA4, json_get_int_default(payload, "intensity", massage_intensity), 0,
-                                     0, 0, 0);
+        target_value = json_get_int_default(payload, "intensity", massage_intensity);
+        if (target_value < 0 || target_value > 3)
+        {
+            return make_error_response(request_id, cmd, "INVALID_MASSAGE",
+                                       "intensity 范围应为 0-3");
+        }
+        has_function_target = true;
+        ret = schedule_serial_action(0xA4, target_value, 0, 0, 0, 0);
     }
     else if (strcmp(action, "uv") == 0)
     {
-        ret = schedule_serial_action(0xA5, json_get_bool_default(payload, "enable", sterilization) ? 1 : 0,
-                                     0, 0, 0, 0);
+        target_value = json_get_bool_default(payload, "enable", sterilization) ? 1 : 0;
+        has_function_target = true;
+        ret = schedule_serial_action(0xA5, target_value, 0, 0, 0, 0);
     }
     else if (strcmp(action, "timer") == 0)
     {
@@ -902,7 +1029,7 @@ static cJSON *handle_bucket_command(cJSON *payload, const char *request_id, cons
     }
     else if (strcmp(action, "stop_all") == 0)
     {
-        ret = schedule_serial_action(0xA7, 0, 0, 0, 0, 0);
+        ret = schedule_ui_command(ASYNC_CMD_STOP_BUCKET);
     }
     else if (strcmp(action, "self_check") == 0)
     {
@@ -922,9 +1049,33 @@ static cJSON *handle_bucket_command(cJSON *payload, const char *request_id, cons
         return make_error_response(request_id, cmd, "SCHEDULE_FAILED", "命令调度失败");
     }
 
-    /* 同步刷新界面显示（定时/按摩/除菌等会修改全局状态） */
-    schedule_ui_refresh();
-    return make_response(request_id, cmd, true, "OK", "", build_status_payload());
+    if (!has_function_target)
+    {
+        (void)schedule_ui_refresh();
+    }
+
+    status_payload = build_status_payload();
+    if (status_payload != NULL && has_function_target)
+    {
+        if (strcmp(action, "heat") == 0 || strcmp(action, "stop_heat") == 0)
+        {
+            (void)cJSON_ReplaceItemInObjectCaseSensitive(
+                status_payload, "constant_temperature", cJSON_CreateBool(target_value));
+        }
+        else if (strcmp(action, "massage") == 0)
+        {
+            (void)cJSON_ReplaceItemInObjectCaseSensitive(
+                status_payload, "massage_intensity", cJSON_CreateNumber(target_value));
+        }
+        else
+        {
+            (void)cJSON_ReplaceItemInObjectCaseSensitive(
+                status_payload, "sterilization", cJSON_CreateBool(target_value));
+        }
+    }
+    return make_response(request_id, cmd, true, "OK",
+                         has_function_target ? "命令已投递，等待异步执行" : "",
+                         status_payload);
 }
 
 static cJSON *handle_base_command(cJSON *payload, const char *request_id, const char *cmd)
@@ -935,6 +1086,10 @@ static cJSON *handle_base_command(cJSON *payload, const char *request_id, const 
     if (action == NULL)
     {
         return make_error_response(request_id, cmd, "MISSING_ACTION", "缺少 action 字段");
+    }
+    if (system_mcu_link_state_get() != SYSTEM_MCU_LINK_ONLINE)
+    {
+        return make_error_response(request_id, cmd, "MCU_OFFLINE", "MCU链路未在线");
     }
 
     if (strcmp(action, "shutdown") == 0)
@@ -981,15 +1136,6 @@ static cJSON *handle_base_command(cJSON *payload, const char *request_id, const 
         ret = schedule_serial_action(0xB6,
                                      0,
                                      clamp_u8_local(json_get_int_default(payload, "minutes", 1), 0, 10),
-                                     0,
-                                     0,
-                                     0);
-    }
-    else if (strcmp(action, "hot_dry") == 0)
-    {
-        ret = schedule_serial_action(0xB7,
-                                     0,
-                                     clamp_u8_local(json_get_int_default(payload, "time_x10min", 1), 0, 9),
                                      0,
                                      0,
                                      0);
@@ -1051,7 +1197,13 @@ static cJSON *handle_robot_command(cJSON *payload, const char *request_id, const
     }
     else if (strcmp(action, "goto_station_id") == 0)
     {
-        ret = RobotTcp_GotoStationById(json_get_int_default(payload, "station_id", -1));
+        int station_index = json_get_int_default(payload, "station_id", -1);
+        if (station_index < 0)
+        {
+            cJSON_Delete(data);
+            return make_error_response(request_id, cmd, "INVALID_STATION", "缺少 station_id");
+        }
+        ret = submit_navigation_request(station_index);
     }
     else if (strcmp(action, "goto_station_name") == 0)
     {
@@ -1062,6 +1214,14 @@ static cJSON *handle_robot_command(cJSON *payload, const char *request_id, const
             return make_error_response(request_id, cmd, "INVALID_STATION", "缺少 station_name");
         }
         ret = RobotTcp_GotoStationByName(name);
+    }
+    else if (strcmp(action, "goto_base") == 0)
+    {
+        pthread_mutex_lock(&g_navigation_request_lock);
+        g_navigation_request.return_base = true;
+        g_navigation_request.pending = true;
+        pthread_mutex_unlock(&g_navigation_request_lock);
+        ret = 0;
     }
     else if (strcmp(action, "charge") == 0)
     {
@@ -1308,11 +1468,128 @@ static int send_json_response(int fd, cJSON *response)
     return ret;
 }
 
-static int process_one_frame(int client_fd, const char *json_text, size_t json_len)
+static void update_robot_position(cJSON *data)
+{
+    cJSON *item;
+    robot_position_t new_pos;
+
+    if (data == NULL)
+    {
+        app_log_user("position", "update_robot_position: data is NULL");
+        return;
+    }
+
+    // 打印原始数据用于调试
+    char *debug_str = cJSON_PrintUnformatted(data);
+    if (debug_str != NULL)
+    {
+        //app_log_user("position", "收到位置数据: %s", debug_str);
+        cJSON_free(debug_str);
+    }
+
+    // 初始化 new_pos 为 0
+    memset(&new_pos, 0, sizeof(new_pos));
+    new_pos.powquantity = -1;  // 默认值
+    new_pos.mapname[0] = '\0';
+    new_pos.timestamp[0] = '\0';
+
+    // ========== 使用 cJSON_ArrayForEach 遍历所有子节点 ==========
+    cJSON_ArrayForEach(item, data)
+    {
+        if (item->string == NULL)
+        {
+            continue;
+        }
+
+        if (strcmp(item->string, "x") == 0 && cJSON_IsNumber(item))
+        {
+            new_pos.x = item->valuedouble;
+        }
+        else if (strcmp(item->string, "y") == 0 && cJSON_IsNumber(item))
+        {
+            new_pos.y = item->valuedouble;
+        }
+        else if (strcmp(item->string, "z") == 0 && cJSON_IsNumber(item))
+        {
+            new_pos.z = item->valuedouble;
+            /* 电量改由MCU提供，保留原底盘解析语句供协议对照。 */
+            // } else if (strcmp(item->string, "powquantity") == 0 && cJSON_IsNumber(item)) {
+            //     new_pos.powquantity = (int)item->valueint;
+        }
+        else if (strcmp(item->string, "power") == 0 && cJSON_IsNumber(item))
+        {
+            new_pos.power = item->valuedouble;
+        }
+        else if (strcmp(item->string, "velSpeed") == 0 && cJSON_IsNumber(item))
+        {
+            new_pos.velSpeed = item->valuedouble;
+        }
+        else if (strcmp(item->string, "velAngle") == 0 && cJSON_IsNumber(item))
+        {
+            new_pos.velAngle = item->valuedouble;
+        }
+        else if (strcmp(item->string, "emgStop") == 0 && cJSON_IsNumber(item))
+        {
+            new_pos.emgStop = (int)item->valueint;
+        }
+        else if (strcmp(item->string, "inbuildmap") == 0 && cJSON_IsBool(item))
+        {
+            new_pos.inbuildmap = cJSON_IsTrue(item);
+        }
+        else if (strcmp(item->string, "innavmap") == 0 && cJSON_IsBool(item))
+        {
+            new_pos.innavmap = cJSON_IsTrue(item);
+        }
+        else if (strcmp(item->string, "mapname") == 0 && cJSON_IsString(item))
+        {
+            strncpy(new_pos.mapname, item->valuestring, sizeof(new_pos.mapname) - 1);
+            new_pos.mapname[sizeof(new_pos.mapname) - 1] = '\0';
+        }
+        else if (strcmp(item->string, "timestamp") == 0 && cJSON_IsString(item))
+        {
+            strncpy(new_pos.timestamp, item->valuestring, sizeof(new_pos.timestamp) - 1);
+            new_pos.timestamp[sizeof(new_pos.timestamp) - 1] = '\0';
+        }
+    }
+
+
+    // 更新全局位置
+    pthread_mutex_lock(&g_position_lock);
+    g_robot_position = new_pos;
+    pthread_mutex_unlock(&g_position_lock);
+
+    // 通知 robot_tcp 更新位置
+    RobotTcp_UpdatePosition(
+        (float)new_pos.x,
+        (float)new_pos.y,
+        (float)new_pos.z,
+        new_pos.powquantity,
+        (float)new_pos.power,
+        (float)new_pos.velSpeed,
+        (float)new_pos.velAngle,
+        new_pos.emgStop,
+        new_pos.inbuildmap ? 1 : 0,
+        new_pos.innavmap ? 1 : 0,
+        new_pos.mapname
+    );
+
+    // app_log_user("position", "更新机器人位置: x=%.3f, y=%.3f, z=%.3f, 电量=%d%%",
+    //              new_pos.x, new_pos.y, new_pos.z, new_pos.powquantity);
+}
+
+static int process_one_frame(tcp_client_t *client, const char *json_text, size_t json_len)
 {
     cJSON *root;
     cJSON *response;
     char *json_copy = (char *)malloc(json_len + 1u);
+    int client_fd;
+
+    if (client == NULL)
+    {
+        return -1;
+    }
+
+    client_fd = client->fd;
 
     if (json_copy == NULL)
     {
@@ -1329,6 +1606,32 @@ static int process_one_frame(int client_fd, const char *json_text, size_t json_l
     {
         response = make_error_response(NULL, "unknown", "BAD_JSON", "JSON 解析失败");
         return send_json_response(client_fd, response);
+    }
+
+    const char *type = json_get_string(root, "type");
+    if (type != NULL && strcmp(type, "position_update") == 0)
+    {
+        cJSON *data = cJSON_GetObjectItemCaseSensitive(root, "data");
+        if (data != NULL && cJSON_IsObject(data))
+        {
+            update_robot_position(data);
+        }
+        cJSON_Delete(root);
+        return 0;
+    }
+
+    const char *cmd = json_get_string(root, "cmd");
+    if (client->is_proxy && cmd != NULL && strcmp(cmd, "stations_changed") == 0)
+    {
+        APP_LOG_USER("TCP_SERVICE", "收到站点更新通知，重新查询完整列表");
+        cJSON_Delete(root);
+        return send_json_response(client_fd, RobotTcp_BuildStationsQueryRequest());
+    }
+    if (client->is_proxy && RobotTcp_IsProxyMessage(root))
+    {
+        (void)RobotTcp_HandleProxyMessage(root);
+        cJSON_Delete(root);
+        return 0;
     }
 
     response = dispatch_request(root);
@@ -1357,12 +1660,14 @@ static int process_client_buffer(tcp_client_t *client)
                 client->rx_len = 0u;
                 client->rx_buffer[0] = '\0';
             }
+            // 可能存在半个帧的情况，需要修改
             return 0;
         }
 
         if (head != client->rx_buffer)
         {
             remaining = client->rx_len - (size_t)(head - client->rx_buffer);
+            // 把从 head 开始的 remaining 字节移动到rx_buffer 开头，丢弃前面的无效数据
             memmove(client->rx_buffer, head, remaining);
             client->rx_len = remaining;
             client->rx_buffer[client->rx_len] = '\0';
@@ -1375,7 +1680,7 @@ static int process_client_buffer(tcp_client_t *client)
         }
 
         frame_len = (size_t)(tail - (client->rx_buffer + prefix_len));
-        if (process_one_frame(client->fd, client->rx_buffer + prefix_len, frame_len) != 0)
+        if (process_one_frame(client, client->rx_buffer + prefix_len, frame_len) != 0)
         {
             return -1;
         }
@@ -1484,9 +1789,17 @@ static void *tcp_service_thread(void *arg)
             int client_fd = accept(g_tcp_service.listen_fd, (struct sockaddr *)&client_addr, &client_len);
             if (client_fd >= 0)
             {
-                if (add_client_locked(client_fd, &client_addr) < 0)
+                int client_index = add_client_locked(client_fd, &client_addr);
+                if (client_index < 0)
                 {
                     close(client_fd);
+                }
+                else if (g_tcp_service.clients[client_index].is_proxy)
+                {
+                    if (request_proxy_stations_locked(client_index) != 0)
+                    {
+                        remove_client_locked(client_index);
+                    }
                 }
             }
         }
@@ -1517,6 +1830,13 @@ static void *tcp_service_thread(void *arg)
                 continue;
             }
 
+            APP_LOG_USER("TCP_SERVICE",
+                         "RX client=%s:%u len=%zd data=%.*s",
+                         inet_ntoa(client->addr.sin_addr),
+                         (unsigned int)ntohs(client->addr.sin_port),
+                         bytes_read,
+                         (int)bytes_read,
+                         client->rx_buffer + client->rx_len);
             client->rx_len += (size_t)bytes_read;
             if (process_client_buffer(client) != 0)
             {
@@ -1540,6 +1860,46 @@ static void *tcp_service_thread(void *arg)
     return NULL;
 }
 
+int tcp_service_send_proxy_json(cJSON *json_message)
+{
+    int ret = -1;
+    int index;
+    bool caller_is_service_thread = g_tcp_service.initialized
+                                    && pthread_equal(pthread_self(), g_tcp_service.thread);
+
+    if (json_message == NULL)
+    {
+        return -1;
+    }
+
+    if (!caller_is_service_thread)
+    {
+        pthread_mutex_lock(&g_tcp_service.lock);
+    }
+
+    for (index = 0; index < TCP_SERVICE_MAX_CLIENTS; ++index)
+    {
+        if (g_tcp_service.clients[index].fd >= 0 && g_tcp_service.clients[index].is_proxy)
+        {
+            ret = send_json_response(g_tcp_service.clients[index].fd, json_message);
+            json_message = NULL;
+            break;
+        }
+    }
+
+    if (!caller_is_service_thread)
+    {
+        pthread_mutex_unlock(&g_tcp_service.lock);
+    }
+
+    if (json_message != NULL)
+    {
+        cJSON_Delete(json_message);
+    }
+
+    return ret;
+}
+
 int tcp_service_init(void)
 {
     int index;
@@ -1552,6 +1912,7 @@ int tcp_service_init(void)
     for (index = 0; index < TCP_SERVICE_MAX_CLIENTS; ++index)
     {
         g_tcp_service.clients[index].fd = -1;
+        g_tcp_service.clients[index].is_proxy = false;
         g_tcp_service.clients[index].rx_len = 0u;
         g_tcp_service.clients[index].rx_buffer[0] = '\0';
     }
@@ -1581,4 +1942,52 @@ int tcp_service_init(void)
 void tcp_service_deinit(void)
 {
     g_tcp_service.running = false;
+}
+
+void tcp_service_process_main_thread_actions(void)
+{
+    int station_index = -1;
+    bool return_base = false;
+
+    pthread_mutex_lock(&g_navigation_request_lock);
+    if (g_navigation_request.pending)
+    {
+        station_index = g_navigation_request.station_index;
+        return_base = g_navigation_request.return_base;
+        g_navigation_request.pending = false;
+    }
+    pthread_mutex_unlock(&g_navigation_request_lock);
+
+    if (return_base)
+    {
+        if (system_start_return_base() != 0)
+        {
+            APP_LOG_ERROR("TCP_SERVICE", "主线程执行回仓失败");
+        }
+        return;
+    }
+    if (station_index < 0)
+    {
+        return;
+    }
+
+    current_selected_location_index = station_index;
+    if (system_start_selected_location_navigation(lv_screen_active()) != 0)
+    {
+        APP_LOG_ERROR("TCP_SERVICE", "主线程执行站点导航失败: station_index=%d",
+                      station_index);
+    }
+}
+
+bool tcp_service_get_robot_position(robot_position_t *pos)
+{
+    if (pos == NULL)
+    {
+        return false;
+    }
+
+    pthread_mutex_lock(&g_position_lock);
+    *pos = g_robot_position;
+    pthread_mutex_unlock(&g_position_lock);
+    return true;
 }

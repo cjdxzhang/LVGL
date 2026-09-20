@@ -433,6 +433,7 @@ void cleaning_animation_set_stage(uint8_t stage)
     cleaning_start_shine(stage);
 }
 
+// 自清洁页面动画清理
 void cleaning_animation_cleanup(void)
 {
     lv_obj_t *root = s_root;

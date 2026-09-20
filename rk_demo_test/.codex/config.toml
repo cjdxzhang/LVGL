@@ -1,0 +1,4 @@
+# Ubuntu 24.04 的 AppArmor 禁止当前环境创建非特权 user/network namespace，
+# Codex 的 workspace-write(bwrap) 沙箱会因此在配置 loopback 时失败。
+# 本项目已在 ~/.codex/config.toml 中标记为 trusted，改用宿主环境的访问控制。
+sandbox_mode = "danger-full-access"

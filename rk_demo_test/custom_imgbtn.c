@@ -1,22 +1,27 @@
 #include "gui_guider.h"
 #include "custom.h"
 #include "custom_imgbtn.h"
+#include "page_initialized.h"
 #include "serial.h"
 #include "system_manager.h"
 #include <stdio.h>
 
 int16_t to_preparing_flat =
     1; /* 记录转到preparing的标志 1--注水中，2--自清洁中，3--移动中，4--返回基站中*/
-int16_t to_setting_flat =
-    1; /* 记录转到setting的标志 1--从index跳转，2--从working跳转 */
 int16_t to_location_flat =
     1; /* 记录转到location的标志 1--从index跳转，2--从working跳转 3--从preparing跳转 */
+
+static ui_screen_id_t g_setting_entry_screen = UI_SCREEN_INDEX;
 
 static lv_timer_t *g_stop_dialog_timer = NULL;
 static int32_t g_stop_dialog_countdown = 0;
 static lv_obj_t *g_message_dialog = NULL;
 static bool g_message_dialog_should_navigate = false;
 static ui_screen_id_t g_message_dialog_target_screen = UI_SCREEN_INDEX;
+static lv_obj_t *g_mcu_outage_guard = NULL; // 全屏透明保护层对象
+static lv_obj_t *g_mcu_outage_panel = NULL; // 全屏透明保护层上的弹窗对象
+static bool g_mcu_outage_dialog_visible = true; // 全屏透明保护层上的弹窗是否可见
+static lv_timer_t *g_mcu_outage_show_timer = NULL;
 
 static bool stop_dialog_obj_is_valid(const lv_obj_t *obj)
 {
@@ -44,6 +49,7 @@ void stop_dialog_cleanup(void)
     if (guider_ui.preparing_dialog1 != NULL &&
             lv_obj_is_valid(guider_ui.preparing_dialog1))
     {
+        lv_obj_add_flag(guider_ui.preparing_dialog1, LV_OBJ_FLAG_HIDDEN);
         stop_dialog_reset_no_label();
     }
 }
@@ -174,17 +180,79 @@ static bool *get_active_screen_del_flag(lv_ui *ui)
     return NULL;
 }
 
+static void screen_dynamic_init_reset(ui_screen_id_t screen)
+{
+    switch (screen)
+    {
+    case UI_SCREEN_INDEX:
+        _is_index_page_initialized = false;
+        break;
+    case UI_SCREEN_SETTING:
+        _is_setting_page_initialized = false;
+        break;
+    case UI_SCREEN_PREPARING:
+        _is_preparing_page_initialized = false;
+        break;
+    case UI_SCREEN_LOCATION:
+        _is_location_page_initialized = false;
+        break;
+    case UI_SCREEN_CONF_MODE:
+        _is_conf_mode_page_initialized = false;
+        break;
+    case UI_SCREEN_CONF_MODE_DETAIL:
+        _is_conf_mode_detail_page_initialized = false;
+        break;
+    case UI_SCREEN_CONF_LOCATION:
+        _is_conf_location_page_initialized = false;
+        break;
+    case UI_SCREEN_CONF_ADVANCE:
+    case UI_SCREEN_CONF_WIFI:
+    case UI_SCREEN_CONF_OTHER:
+    default:
+        break;
+    }
+}
+
+static bool setting_chain_screen_is_active(lv_obj_t *active_screen)
+{
+    return active_screen == guider_ui.setting ||
+           active_screen == guider_ui.conf_advance ||
+           active_screen == guider_ui.conf_mode ||
+           active_screen == guider_ui.conf_mode_detail ||
+           active_screen == guider_ui.conf_wifi ||
+           active_screen == guider_ui.conf_other ||
+           active_screen == guider_ui.conf_location;
+}
+
+static void setting_entry_screen_update(lv_obj_t *active_screen)
+{
+    if (active_screen == guider_ui.index)
+    {
+        g_setting_entry_screen = UI_SCREEN_INDEX;
+        return;
+    }
+    if (active_screen == guider_ui.working)
+    {
+        g_setting_entry_screen = UI_SCREEN_WORKING;
+        return;
+    }
+    if (setting_chain_screen_is_active(active_screen))
+    {
+        return;
+    }
+
+    g_setting_entry_screen = UI_SCREEN_INDEX;
+    printf("设置入口来源无法识别，默认返回首页\n");
+}
+
 bool navigate_to_screen(ui_screen_id_t target_screen)
 {
     lv_obj_t **new_scr = NULL;
     bool *new_scr_del = NULL;
-    bool *old_scr_del = get_active_screen_del_flag(&guider_ui);
+    bool *old_scr_del;
     ui_setup_scr_t setup_scr = NULL;
-
-    if (old_scr_del == NULL)
-    {
-        return false;
-    }
+    lv_obj_t *active_screen;
+    bool needs_create;
 
     switch (target_screen)
     {
@@ -211,7 +279,7 @@ bool navigate_to_screen(ui_screen_id_t target_screen)
     case UI_SCREEN_WORKING:
         new_scr = &guider_ui.working;
         new_scr_del = &guider_ui.working_del;
-        setup_scr = setup_scr_working; // 工作页面(桶体页面?)
+        setup_scr = WorkPageInit; // 工作页面
         break;
     case UI_SCREEN_CONF_ADVANCE:
         new_scr = &guider_ui.conf_advance;
@@ -247,7 +315,42 @@ bool navigate_to_screen(ui_screen_id_t target_screen)
         return false;
     }
 
-    ui_load_scr_animation(&guider_ui, new_scr, *new_scr_del, old_scr_del,
+    active_screen = lv_screen_active();
+    if (target_screen == UI_SCREEN_SETTING)
+    {
+        setting_entry_screen_update(active_screen);
+    }
+    if (*new_scr != NULL && lv_obj_is_valid(*new_scr) &&
+            active_screen == *new_scr)
+    {
+        *new_scr_del = false;
+        system_manager_refresh_ui();
+        if (system_mcu_link_state_get() == SYSTEM_MCU_LINK_OUTAGE)
+        {
+            mcu_outage_guard_show(active_screen);
+        }
+        return true;
+    }
+
+    old_scr_del = get_active_screen_del_flag(&guider_ui);
+    if (old_scr_del == NULL)
+    {
+        return false;
+    }
+
+    needs_create = *new_scr == NULL || !lv_obj_is_valid(*new_scr);
+    if (needs_create)
+    {
+        screen_dynamic_init_reset(target_screen);
+        setup_scr(&guider_ui);
+        if (*new_scr == NULL || !lv_obj_is_valid(*new_scr))
+        {
+            return false;
+        }
+    }
+    *new_scr_del = false;
+
+    ui_load_scr_animation(&guider_ui, new_scr, false, old_scr_del,
                           setup_scr, LV_SCR_LOAD_ANIM_NONE, 200, 0, false, false);
     return true;
 }
@@ -398,39 +501,14 @@ lv_obj_t *imgbtn_create_without_bg(lv_obj_t *parent, const void *img_src, const 
     return container;
 }
 
-void setting_back(lv_event_t *e)
-{
-    if (to_setting_flat == 1)
-    {
-        setting_to_index(e);
-    }
-    else if (to_setting_flat == 2)
-    {
-        setting_to_working(e);
-    }
-}
-void setting_to_index(lv_event_t *e)
+void setting_exit_to_entry(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
     switch (code)
     {
     case LV_EVENT_CLICKED:
     {
-        navigate_to_screen(UI_SCREEN_INDEX);
-        break;
-    }
-    default:
-        break;
-    }
-}
-void setting_to_working(lv_event_t *e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    switch (code)
-    {
-    case LV_EVENT_CLICKED:
-    {
-        navigate_to_screen(UI_SCREEN_WORKING);
+        navigate_to_screen(g_setting_entry_screen);
         break;
     }
     default:
@@ -444,7 +522,6 @@ void index_to_setting(lv_event_t *e)
     {
     case LV_EVENT_CLICKED:
     {
-        to_setting_flat = 1; /* 转到setting，设置标志为1，表示从index跳转 */
         navigate_to_screen(UI_SCREEN_SETTING);
         break;
     }
@@ -452,6 +529,20 @@ void index_to_setting(lv_event_t *e)
         break;
     }
 }
+
+static void preparing_exit_cleanup(void)
+{
+    if (to_preparing_flat == 1)
+    {
+        auto_water_page_cleanup();
+    }
+    else if (to_preparing_flat == 2)
+    {
+        self_clean_page_cleanup();
+    }
+    preparing_common_cleanup();
+}
+
 void preparing_to_index(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
@@ -459,7 +550,7 @@ void preparing_to_index(lv_event_t *e)
     {
     case LV_EVENT_CLICKED:
     {
-        preparing_page_cleanup();
+        preparing_exit_cleanup();
         to_preparing_flat = 0;
         navigate_to_screen(UI_SCREEN_INDEX);
         break;
@@ -469,6 +560,7 @@ void preparing_to_index(lv_event_t *e)
     }
 }
 
+// 跳转到preparing页面，设置标志位，表示当前是自清洁还是注水
 void index_to_preparing(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
@@ -624,7 +716,7 @@ void preparing_moving_to_location(lv_event_t *e)
     {
     case LV_EVENT_CLICKED:
     {
-        preparing_page_cleanup();
+        preparing_exit_cleanup();
         to_preparing_flat = 3; /* 转到preparing，设置标志为3，表示移动中 */
         to_location_flat = 3; /* 转到location，设置标志为3，表示从preparing跳转 */
         navigate_to_screen(UI_SCREEN_LOCATION);
@@ -641,7 +733,7 @@ void preparing_to_location(lv_event_t *e)
     {
     case LV_EVENT_CLICKED:
     {
-        preparing_page_cleanup();
+        preparing_exit_cleanup();
         to_preparing_flat = 1; /* 转到preparing，设置标志为3，表示移动中 */
         to_location_flat = 3; /* 转到location，设置标志为3，表示从preparing跳转 */
         navigate_to_screen(UI_SCREEN_LOCATION);
@@ -658,7 +750,7 @@ void preparing_to_working(lv_event_t *e)
     {
     case LV_EVENT_CLICKED:
     {
-        preparing_page_cleanup();
+        preparing_exit_cleanup();
         navigate_to_screen(UI_SCREEN_WORKING);
         break;
     }
@@ -673,18 +765,7 @@ void working_to_preparing_back(lv_event_t *e)
     {
     case LV_EVENT_CLICKED:
     {
-        if (!system_base_flow_try_start(SYSTEM_BASE_FLOW_MOVING,
-                                        "working-return-base"))
-        {
-            return;
-        }
-        to_preparing_flat = 4; /* 转到preparing，设置标志为4，表示返回基站中 */
-        if (!navigate_to_screen(UI_SCREEN_PREPARING))
-        {
-            system_base_flow_finish(SYSTEM_BASE_FLOW_MOVING,
-                                    "return-base-page-failed");
-            to_preparing_flat = 0;
-        }
+        (void)system_start_return_base();
         break;
     }
     default:
@@ -698,7 +779,6 @@ void working_to_setting(lv_event_t *e)
     {
     case LV_EVENT_CLICKED:
     {
-        to_setting_flat = 2; /* 转到setting，设置标志为2，表示从working跳转 */
         navigate_to_screen(UI_SCREEN_SETTING);
         break;
     }
@@ -771,7 +851,7 @@ void preparing_to_cleaning(lv_event_t *e)
     {
     case LV_EVENT_CLICKED:
     {
-        preparing_page_cleanup();
+        preparing_exit_cleanup();
         to_preparing_flat = 2; /* 转到preparing，设置标志为2，表示自清洁中 */
         navigate_to_screen(UI_SCREEN_CONF_MODE);
         break;
@@ -808,20 +888,6 @@ void conf_mode_to_setting(lv_event_t *e)
         break;
     }
 }
-void conf_mode_to_index(lv_event_t *e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    switch (code)
-    {
-    case LV_EVENT_CLICKED:
-    {
-        navigate_to_screen(UI_SCREEN_INDEX);
-        break;
-    }
-    default:
-        break;
-    }
-}
 void conf_mode_to_conf_mode_detail(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
@@ -830,20 +896,6 @@ void conf_mode_to_conf_mode_detail(lv_event_t *e)
     case LV_EVENT_CLICKED:
     {
         navigate_to_screen(UI_SCREEN_CONF_MODE_DETAIL);
-        break;
-    }
-    default:
-        break;
-    }
-}
-void conf_mode_detail_to_index(lv_event_t *e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    switch (code)
-    {
-    case LV_EVENT_CLICKED:
-    {
-        navigate_to_screen(UI_SCREEN_INDEX);
         break;
     }
     default:
@@ -864,21 +916,6 @@ void conf_mode_detail_to_conf_mode(lv_event_t *e)
         break;
     }
 }
-void conf_wifi_to_index(lv_event_t *e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    switch (code)
-    {
-    case LV_EVENT_CLICKED:
-    {
-        navigate_to_screen(UI_SCREEN_INDEX);
-        break;
-    }
-    default:
-        break;
-    }
-}
-
 void conf_wifi_to_setting(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
@@ -908,20 +945,6 @@ void setting_to_conf_wifi(lv_event_t *e)
     }
 }
 
-void conf_advance_to_index(lv_event_t *e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    switch (code)
-    {
-    case LV_EVENT_CLICKED:
-    {
-        navigate_to_screen(UI_SCREEN_INDEX);
-        break;
-    }
-    default:
-        break;
-    }
-}
 void conf_advance_to_setting(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
@@ -951,20 +974,6 @@ void setting_to_conf_advance(lv_event_t *e)
     }
 }
 
-void conf_other_to_index(lv_event_t *e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    switch (code)
-    {
-    case LV_EVENT_CLICKED:
-    {
-        navigate_to_screen(UI_SCREEN_INDEX);
-        break;
-    }
-    default:
-        break;
-    }
-}
 void conf_other_to_setting(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
@@ -994,20 +1003,6 @@ void setting_to_conf_other(lv_event_t *e)
     }
 }
 
-void conf_location_to_index(lv_event_t *e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-    switch (code)
-    {
-    case LV_EVENT_CLICKED:
-    {
-        navigate_to_screen(UI_SCREEN_INDEX);
-        break;
-    }
-    default:
-        break;
-    }
-}
 void conf_location_to_setting(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
@@ -1045,8 +1040,8 @@ void stop_toast(lv_event_t *e)
     case LV_EVENT_CLICKED:
     {
         //preparing_btn_no
-        lv_obj_remove_flag(guider_ui.preparing_dialog1, LV_OBJ_FLAG_HIDDEN);
         stop_dialog_start_countdown();
+        lv_obj_remove_flag(guider_ui.preparing_dialog1, LV_OBJ_FLAG_HIDDEN);
         break;
     }
     default:
@@ -1192,4 +1187,186 @@ void show_message_dialog_and_navigate(lv_obj_t *parent,
                                       ui_screen_id_t target_screen)
 {
     message_dialog_show(parent, message, true, target_screen);
+}
+
+static void mcu_outage_guard_deleted(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_DELETE)
+    {
+        return;
+    }
+    if (lv_event_get_target(e) == g_mcu_outage_guard)
+    {
+        g_mcu_outage_guard = NULL;
+        g_mcu_outage_panel = NULL;
+    }
+}
+
+// 设置弹窗是否可见
+static void mcu_outage_guard_set_dialog_visible(bool visible)
+{
+    if (g_mcu_outage_guard == NULL ||
+            !lv_obj_is_valid(g_mcu_outage_guard) ||
+            g_mcu_outage_panel == NULL ||
+            !lv_obj_is_valid(g_mcu_outage_panel))
+    {
+        return;
+    }
+
+    if (visible)
+    {
+        lv_obj_set_style_bg_opa(g_mcu_outage_guard, LV_OPA_60, 0);
+        lv_obj_clear_flag(g_mcu_outage_panel, LV_OBJ_FLAG_HIDDEN);
+    }
+    else
+    {
+        lv_obj_set_style_bg_opa(g_mcu_outage_guard, LV_OPA_TRANSP, 0);
+        lv_obj_add_flag(g_mcu_outage_panel, LV_OBJ_FLAG_HIDDEN);
+    }
+    g_mcu_outage_dialog_visible = visible;
+}
+
+// 点击屏幕出现弹窗
+static void mcu_outage_guard_clicked(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED)
+    {
+        return;
+    }
+    mcu_outage_guard_set_dialog_visible(true);
+}
+
+// 确认按钮点击隐藏弹窗
+static void mcu_outage_confirm_clicked(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED)
+    {
+        return;
+    }
+    mcu_outage_guard_set_dialog_visible(false);
+}
+
+// 销毁全屏拦截窗口，并为下一次断连恢复默认弹窗状态
+void mcu_outage_guard_destroy(void)
+{
+    if (g_mcu_outage_show_timer != NULL)
+    {
+        lv_timer_delete(g_mcu_outage_show_timer);
+        g_mcu_outage_show_timer = NULL;
+    }
+    if (g_mcu_outage_guard != NULL && lv_obj_is_valid(g_mcu_outage_guard))
+    {
+        lv_obj_delete(g_mcu_outage_guard);
+    }
+    g_mcu_outage_guard = NULL;
+    g_mcu_outage_panel = NULL;
+    g_mcu_outage_dialog_visible = true;
+}
+
+static void mcu_outage_guard_show_timer_cb(lv_timer_t *timer)
+{
+    lv_obj_t *active_screen;
+
+    if (timer != g_mcu_outage_show_timer)
+    {
+        return;
+    }
+    g_mcu_outage_show_timer = NULL;
+
+    if (system_mcu_link_state_get() != SYSTEM_MCU_LINK_OUTAGE)
+    {
+        return;
+    }
+
+    active_screen = lv_screen_active();
+    if (active_screen != NULL)
+    {
+        mcu_outage_guard_show(active_screen);
+    }
+}
+
+void mcu_outage_guard_show_delayed(uint32_t delay_ms)
+{
+    if (g_mcu_outage_show_timer != NULL)
+    {
+        lv_timer_delete(g_mcu_outage_show_timer);
+        g_mcu_outage_show_timer = NULL;
+    }
+
+    g_mcu_outage_show_timer = lv_timer_create(mcu_outage_guard_show_timer_cb,
+                              delay_ms, NULL);
+    if (g_mcu_outage_show_timer != NULL)
+    {
+        lv_timer_set_repeat_count(g_mcu_outage_show_timer, 1);
+    }
+}
+
+// 在mcu断开后显示全屏拦截窗口
+void mcu_outage_guard_show(lv_obj_t *screen)
+{
+    lv_obj_t *label;
+    lv_obj_t *button;
+    lv_obj_t *button_label;
+
+    if (screen == NULL || !lv_obj_is_valid(screen))
+    {
+        return;
+    }
+    if (g_mcu_outage_guard != NULL &&
+            lv_obj_is_valid(g_mcu_outage_guard) &&
+            lv_obj_get_parent(g_mcu_outage_guard) == screen)
+    {
+        lv_obj_move_foreground(g_mcu_outage_guard);
+        return;
+    }
+
+    bool dialog_visible = g_mcu_outage_dialog_visible;
+    mcu_outage_guard_destroy();
+    g_mcu_outage_guard = lv_obj_create(screen);
+    lv_obj_add_event_cb(g_mcu_outage_guard, mcu_outage_guard_deleted,
+                        LV_EVENT_DELETE, NULL);
+    lv_obj_add_event_cb(g_mcu_outage_guard, mcu_outage_guard_clicked,
+                        LV_EVENT_CLICKED, NULL);
+    lv_obj_set_pos(g_mcu_outage_guard, 0, 0);
+    lv_obj_set_size(g_mcu_outage_guard, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(g_mcu_outage_guard, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(g_mcu_outage_guard, LV_OPA_60, 0);
+    lv_obj_set_style_border_width(g_mcu_outage_guard, 0, 0);
+    lv_obj_set_style_pad_all(g_mcu_outage_guard, 0, 0);
+    lv_obj_clear_flag(g_mcu_outage_guard, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(g_mcu_outage_guard, LV_OBJ_FLAG_CLICKABLE);
+
+    g_mcu_outage_panel = lv_obj_create(g_mcu_outage_guard);
+    lv_obj_set_size(g_mcu_outage_panel, 440, 200);
+    lv_obj_center(g_mcu_outage_panel);
+    lv_obj_set_style_bg_color(g_mcu_outage_panel, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_bg_opa(g_mcu_outage_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(g_mcu_outage_panel, 12, 0);
+    lv_obj_set_style_border_width(g_mcu_outage_panel, 0, 0);
+    lv_obj_clear_flag(g_mcu_outage_panel, LV_OBJ_FLAG_SCROLLABLE);
+
+    label = lv_label_create(g_mcu_outage_panel);
+    lv_label_set_text(label, "设备状态异常，请回仓重启");
+    lv_obj_set_width(label, LV_PCT(85));
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(label, &lv_font_SourceHanSansSC_Regular_25, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(0x333333), 0);
+    lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 25);
+
+    button = lv_btn_create(g_mcu_outage_panel);
+    lv_obj_set_size(button, 120, 42);
+    lv_obj_align(button, LV_ALIGN_BOTTOM_MID, 0, -20);
+    lv_obj_set_style_bg_color(button, lv_color_hex(0x2195f6), 0);
+    lv_obj_set_style_radius(button, 8, 0);
+    lv_obj_add_event_cb(button, mcu_outage_confirm_clicked,
+                        LV_EVENT_CLICKED, NULL);
+
+    button_label = lv_label_create(button);
+    lv_label_set_text(button_label, "确定");
+    lv_obj_center(button_label);
+    lv_obj_set_style_text_font(button_label,
+                               &lv_font_SourceHanSansSC_Regular_25, 0);
+    lv_obj_set_style_text_color(button_label, lv_color_hex(0xffffff), 0);
+    lv_obj_move_foreground(g_mcu_outage_guard);
+    mcu_outage_guard_set_dialog_visible(dialog_visible);
 }

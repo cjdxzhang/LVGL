@@ -10,7 +10,7 @@
 
 #define SYSTEM_MODE_NAME_LEN 32
 #define SYSTEM_MODE_MAX_COUNT 16
-#define SYSTEM_LOCATION_NAME_LEN 32
+#define SYSTEM_LOCATION_NAME_LEN 64
 #define SYSTEM_LOCATION_MAX_COUNT 16
 
 typedef struct
@@ -22,7 +22,7 @@ typedef struct
     int16_t temperature;
     bool use_drug1;
     bool use_drug2;
-    int position;
+    char station_name[SYSTEM_LOCATION_NAME_LEN];
 } system_mode_t;
 
 typedef struct
@@ -44,7 +44,6 @@ typedef enum
     SYSTEM_BASE_FLOW_IDLE = 0,
     SYSTEM_BASE_FLOW_WATERING,
     SYSTEM_BASE_FLOW_SELF_CLEANING,
-    SYSTEM_BASE_FLOW_DRYING,
     SYSTEM_BASE_FLOW_MOVING
 } system_base_flow_t;
 
@@ -69,6 +68,13 @@ typedef enum
     SYSTEM_ACTION_SOURCE_APP
 } system_action_source_t;
 
+typedef enum
+{
+    SYSTEM_MCU_LINK_UNKNOWN = 0,
+    SYSTEM_MCU_LINK_ONLINE,
+    SYSTEM_MCU_LINK_OUTAGE
+} system_mcu_link_state_t;
+
 typedef struct
 {
     system_command_result_t result;
@@ -84,8 +90,6 @@ extern int current_selected_location_index;
 /** 模式属性 */
 extern int16_t
 last_link_status; /* 最近一次连接状态: 0x00=基站和桶已断开, 0x01=基站和桶已连接 */
-extern bool
-has_mcu_status_report; /* 是否已收到有效 MCU 状态帧，避免默认 LINK_STATUS 误触发页面切换 */
 extern int16_t temp_set; /* 温度设置值，单位 °C（可用乘 100 的整数表示） */
 extern uint32_t timer_set; /* 定时设置值，单位 sec */
 extern uint32_t remaining_seconds; /* 桶体本地倒计时剩余秒数，不参与A6编码 */
@@ -109,15 +113,6 @@ extern int current_location; /* 0--基站 1，2,3,4,5.....当前定位索引 */
 extern int going_to_location; /* 目标定位索引 */
 
 /**记录某个页面是否已经初始化 */
-extern bool _is_index_page_initialized;
-extern bool _is_setting_page_initialized;
-extern bool _is_location_page_initialized;
-extern bool _is_working_page_initialized;
-extern bool _is_conf_mode_page_initialized;
-extern bool _is_conf_location_page_initialized;
-extern bool _is_conf_mode_detail_page_initialized;
-extern bool _is_preparing_page_initialized;
-
 /**全局计时，回到基站开始计时 */
 extern lv_timer_t *g_auto_drain_timer;
 
@@ -128,11 +123,25 @@ extern int current_selected_mode_index;
 const system_mode_t *system_mode_get(size_t index);
 int system_mode_apply_index(int mode_index);
 int16_t system_current_temp_get(void);
-void system_manager_refresh_current_page(void);
+void system_manager_refresh_base_ui(void);
+void system_manager_refresh_working_ui(void);
 void system_manager_refresh_ui(void);
 void system_start_flow(void);
 void system_select_self_clean(void);
-void system_stop_flow(void);
+void system_bucket_stop(void);
+bool system_bucket_heat_set(bool enable);
+bool system_bucket_massage_set(int intensity);
+bool system_bucket_uv_set(bool enable);
+/* 统一下发 A6 并按 timer_set 重启倒计时；timer_set 为0时取消倒计时。 */
+void system_bucket_timer_apply(void);
+void system_auto_water_stop(void);
+void system_self_clean_stop(void);
+void system_active_flow_stop(void);
+system_mcu_link_state_t system_mcu_link_state_get(void);
+/* 串口收到并校验合法状态帧后调用；统一投递保护层恢复和LINK_STATUS应用。 */
+void system_mcu_status_report_notify(uint8_t link_status);
+/* 合法MCU电量达到20%及以上时重新武装离站低电保护。 */
+void system_mcu_battery_report_notify(uint8_t battery_percent);
 
 
 
@@ -140,17 +149,17 @@ int system_location_save();
 
 // 初始化 系统管理模块
 void system_manager_init(lv_ui *ui);
-void system_ui_schedule_link_status(uint8_t link_status);
 void system_ui_schedule_liquid_shortage(uint8_t shortage_mask);
+void system_location_sync_from_robot_cache(void);
 //  将指定模式的设置应用到当前运行时环境
 void apply_mode_to_runtime(lv_event_t *e);
 
 //定位页面点击定位按钮
 void location_grid_btn_clicked(lv_event_t *e);
 int system_start_selected_location_navigation(lv_obj_t *dialog_parent);
+int system_start_return_base(void);
 void system_auto_water_navigation_arm(void);
 void system_auto_water_navigation_cancel(void);
-void system_self_clean_stop_confirmed(void);
 bool system_base_flow_try_start(system_base_flow_t flow, const char *source);
 system_command_decision_t system_base_flow_request_start(
     system_base_flow_t flow, system_action_source_t source);
@@ -166,8 +175,10 @@ system_command_decision_t system_voice_command_execute(voice_command_t command);
 void index_page_init(lv_ui *ui);
 //定位页面，根据当前的定位设置，载入定位按钮，并定义事件
 void location_page_init(lv_ui *ui);
-//工作页面，初始化右边按钮群，并定义事件
-void working_page_init(lv_ui *ui);
+// 工作页进入时绑定显示对象并启动刷新定时器。
+void system_manager_working_page_init(lv_ui *ui);
+// 工作页卸载或删除时清理瞬态状态和定时器。
+void system_manager_working_page_cleanup(void);
 void bucket_temp_update_actual_from_mcu(int16_t temp);
 //模式设置界面列出当前所有模式 + 新增按钮，点击进入编辑界面，编辑界面有保存和删除按钮
 void conf_mode_init_listall(lv_ui *ui);
@@ -198,11 +209,9 @@ void update_timer_set(lv_ui *ui);
 void apply_water_level_ui(int level);
 void apply_use_drug_ui(bool use_drug1, bool use_drug2);
 
-void preparing_page_cleanup(void);
-/**停止自动上水并返回首页。 */
-void auto_water_page_stop(lv_event_t *e);
-
-void working_bind_play_pause_buttons(lv_obj_t *pause_btn, lv_obj_t *play_btn);
+void preparing_common_cleanup(void);
+void auto_water_page_cleanup(void);
+void self_clean_page_cleanup(void);
 
 void working_plus_clicked(lv_event_t *e);
 void working_minus_clicked(lv_event_t *e);
@@ -212,7 +221,6 @@ void working_sterilization_toggle(lv_event_t *e);
 void working_massage_intensity_clicked(lv_event_t *e);
 void working_show_return_dialog(lv_event_t *e);
 void working_pause_clicked(lv_event_t *e);
-void working_play_clicked(lv_event_t *e);
 
 /**点击模式的恢复默认按钮 */
 void conf_mode_detail_restore_default_clicked(lv_event_t *e);

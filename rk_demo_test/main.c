@@ -9,6 +9,7 @@
 #include "lv_port_init.h"
 #include "backlight_control.h"
 #include "app_manager.h"
+#include "tcp_service.h"
 
 lv_ui guider_ui;
 
@@ -34,6 +35,7 @@ int main(int argc, char **argv)
 
     while (!quit)
     {
+        tcp_service_process_main_thread_actions();
         lv_task_handler();
         usleep(5000);
     }

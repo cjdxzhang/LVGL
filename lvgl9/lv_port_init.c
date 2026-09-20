@@ -33,7 +33,8 @@ static int log_level = LV_LOG_LEVEL_WARN;
 static void append_logcat_message(const char *buf)
 {
     FILE *fp = fopen("/var/log/messages", "a");
-    if (fp == NULL) {
+    if (fp == NULL)
+    {
         return;
     }
 
@@ -43,7 +44,8 @@ static void append_logcat_message(const char *buf)
 
 static void print_cb(lv_log_level_t level, const char *buf)
 {
-    if (level >= log_level) {
+    if (level >= log_level)
+    {
         syslog(LOG_USER | LOG_NOTICE, "[LVGL] %s\n", buf);
         append_logcat_message(buf);
     }
@@ -129,26 +131,33 @@ int lv_port_set_rotation(int rotation)
 {
     lv_display_t *disp;
     lv_display_rotation_t lvgl_rotation;
+    lv_display_rotation_t previous_lvgl_rotation;
 
-    if (rotation != 0 && rotation != 180) {
+    if (rotation != 0 && rotation != 180)
+    {
         LV_LOG_ERROR("不支持的运行时旋转角度: %d", rotation);
         return -1;
     }
-    if (g_port_rotation == rotation) {
+    if (g_port_rotation == rotation)
+    {
         return 0;
     }
 
     disp = lv_display_get_default();
-    if (disp == NULL) {
+    if (disp == NULL)
+    {
         LV_LOG_ERROR("默认显示设备尚未创建");
         return -1;
     }
 
     lvgl_rotation = (rotation == 180) ?
                     LV_DISPLAY_ROTATION_180 : LV_DISPLAY_ROTATION_0;
+    previous_lvgl_rotation = (g_port_rotation == 180) ?
+                             LV_DISPLAY_ROTATION_180 : LV_DISPLAY_ROTATION_0;
 
 #if defined(LV_USE_RKADK) && LV_USE_RKADK
-    if (lv_rkadk_disp_set_rotation(disp, lvgl_rotation) != 0) {
+    if (lv_rkadk_disp_set_rotation(disp, lvgl_rotation) != 0)
+    {
         LV_LOG_ERROR("RKADK 显示旋转失败: %d", rotation);
         return -1;
     }
@@ -156,8 +165,17 @@ int lv_port_set_rotation(int rotation)
     lv_display_set_rotation(disp, lvgl_rotation);
 #endif
 
-    if (lv_port_indev_set_rotation(g_indev_rotation + rotation) != 0) {
+    if (lv_port_indev_set_rotation(g_indev_rotation + rotation) != 0)
+    {
         LV_LOG_ERROR("触摸方向旋转失败: %d", rotation);
+#if defined(LV_USE_RKADK) && LV_USE_RKADK
+        if (lv_rkadk_disp_set_rotation(disp, previous_lvgl_rotation) != 0)
+        {
+            LV_LOG_ERROR("显示方向回滚失败: %d", g_port_rotation);
+        }
+#else
+        lv_display_set_rotation(disp, previous_lvgl_rotation);
+#endif
         return -1;
     }
 

@@ -23,6 +23,9 @@
 #define SERIAL_RX_BUFFER_SIZE   256u
 #define SERIAL_TX_INTERVAL_MS   1000u
 #define SERIAL_RECONNECT_INTERVAL_MS 2000u
+#define SERIAL_BATTERY_OFFSET    11u
+#define SERIAL_BATTERY_FULL_RAW  0xFFu
+#define SERIAL_BATTERY_FULL_PERCENT 100u
 
 #define SERIAL_LOG_USER(...) APP_LOG_USER("SERIAL", __VA_ARGS__)
 #define SERIAL_LOG_WARN(...) APP_LOG_WARN("SERIAL", __VA_ARGS__)
@@ -132,6 +135,7 @@ static serial_context_t g_serial =
 };
 static uint32_t g_mcu_status_report_sequence = 0u;
 static uint8_t g_mcu_liquid_shortage_mask = 0u;
+static uint8_t g_mcu_battery_percent = SERIAL_BATTERY_FULL_PERCENT;
 static serial_mcu_error_state_t g_mcu_error_state = {0};
 static bool g_mcu_error_state_valid = false;
 static pthread_mutex_t g_mcu_error_state_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -498,10 +502,36 @@ static void update_mcu_error_state(const uint8_t frame[SERIAL_FRAME_LEN])
 /**
  * 从接收到的协议帧中解析状态，并更新运行时状态变量
  */
+static bool serial_update_battery_from_rx(uint8_t raw)
+{
+    uint8_t percent;
+
+    /* MCU 使用BCD百分比，0xFF单独表示满电，不按255比例换算。 */
+    if (raw == SERIAL_BATTERY_FULL_RAW)
+    {
+        percent = SERIAL_BATTERY_FULL_PERCENT;
+    }
+    else
+    {
+        uint8_t tens = raw >> 4;
+        uint8_t units = raw & 0x0Fu;
+
+        if (tens > 9u || units > 9u)
+        {
+            SERIAL_LOG_WARN("无效MCU电量编码：0x%02X，保留最近有效电量", raw);
+            return false;
+        }
+        percent = tens * 10u + units;
+    }
+    __atomic_store_n(&g_mcu_battery_percent, percent, __ATOMIC_RELEASE);
+    return true;
+}
+
 static void update_runtime_state_from_rx(const uint8_t frame[SERIAL_FRAME_LEN])
 {
     uint8_t liquid_shortage_mask;
     uint8_t previous_liquid_shortage_mask;
+    bool battery_updated;
 
     pthread_mutex_lock(&g_serial.tx_lock);
     memcpy(g_serial.last_rx_frame, frame, SERIAL_FRAME_LEN);
@@ -510,6 +540,8 @@ static void update_runtime_state_from_rx(const uint8_t frame[SERIAL_FRAME_LEN])
 
     bucket_main_status = frame[12];
     base_main_status = frame[23];
+    battery_updated = serial_update_battery_from_rx(
+                          frame[SERIAL_BATTERY_OFFSET]);
 
     /* 缺液三位维持独立UI链路，不与通用故障快照重复。 */
     liquid_shortage_mask = frame[25] & SERIAL_LIQUID_SHORTAGE_MASK;
@@ -527,8 +559,14 @@ static void update_runtime_state_from_rx(const uint8_t frame[SERIAL_FRAME_LEN])
     g_serial.last_rx_ms = get_time_ms();
 
     last_link_status = frame[4];
-    has_mcu_status_report = true;
-    system_ui_schedule_link_status(frame[4]);
+    // 合法帧先更新链路状态，再统一投递保护层恢复和LINK_STATUS应用。
+    (void)__atomic_add_fetch(&g_mcu_status_report_sequence, 1u,
+                             __ATOMIC_RELEASE);
+    system_mcu_status_report_notify(frame[4]);
+    if (battery_updated)
+    {
+        system_mcu_battery_report_notify(serial_mcu_battery_percent());
+    }
     if (liquid_shortage_mask != previous_liquid_shortage_mask)
     {
         system_ui_schedule_liquid_shortage(liquid_shortage_mask);
@@ -538,9 +576,6 @@ static void update_runtime_state_from_rx(const uint8_t frame[SERIAL_FRAME_LEN])
         bucket_temp_update_actual_from_mcu((int16_t)frame[6]);
     }
     current_water_level = protocol_water_level_to_ui_level(frame[5]);
-    // 更新 MCU 状态上报序列号，每收到一个 g_mcu_status_report_sequence就+1
-    (void)__atomic_add_fetch(&g_mcu_status_report_sequence, 1u,
-                             __ATOMIC_RELEASE);
 }
 
 // 获取最近一次 MCU 状态上报的序列号g_mcu_status_report_sequence
@@ -552,6 +587,11 @@ uint32_t serial_mcu_status_report_sequence(void)
 uint8_t serial_mcu_liquid_shortage_mask(void)
 {
     return __atomic_load_n(&g_mcu_liquid_shortage_mask, __ATOMIC_ACQUIRE);
+}
+
+uint8_t serial_mcu_battery_percent(void)
+{
+    return __atomic_load_n(&g_mcu_battery_percent, __ATOMIC_ACQUIRE);
 }
 
 bool serial_mcu_error_state_get(serial_mcu_error_state_t *state)
@@ -807,6 +847,25 @@ static void enqueue_cmd_locked(const pending_cmd_t *cmd)
     g_serial.cmd_queue_count++;
 }
 
+static bool pending_cmd_allowed(uint8_t cmd_type)
+{
+    system_mcu_link_state_t link_state;
+
+    if (cmd_type == CMD_BUCKET_STANDBY || cmd_type == CMD_BASE_STANDBY)
+    {
+        return true;
+    }
+    link_state = system_mcu_link_state_get();
+    if (link_state == SYSTEM_MCU_LINK_ONLINE)
+    {
+        return true;
+    }
+
+    SERIAL_LOG_WARN("MCU链路非在线，拒绝业务命令: cmd_type=0x%02X state=%d",
+                    cmd_type, (int)link_state);
+    return false;
+}
+
 /** 设置一个不带基站数据的一次性命令 */
 static void set_pending_cmd(uint8_t cmd_type, uint8_t link_mode)
 {
@@ -820,6 +879,11 @@ static void set_pending_cmd(uint8_t cmd_type, uint8_t link_mode)
         .sterilization_on = sterilization,
         .base_data_valid = false,
     };
+
+    if (!pending_cmd_allowed(cmd_type))
+    {
+        return;
+    }
 
     pthread_mutex_lock(&g_serial.tx_lock);
     enqueue_cmd_locked(&cmd);
@@ -840,6 +904,11 @@ static void set_pending_cmd_with_base(uint8_t cmd_type, uint8_t link_mode,
         .sterilization_on = sterilization,
         .base_data_valid = base_data != NULL,
     };
+
+    if (!pending_cmd_allowed(cmd_type))
+    {
+        return;
+    }
 
     if (base_data != NULL)
     {

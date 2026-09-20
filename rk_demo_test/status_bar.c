@@ -1,6 +1,8 @@
 #include "status_bar.h"
 #include "app_manager.h"
 #include "wifi_manager.h"
+#include "serial.h"
+#include "system_manager.h"
 #include "app_log.h"
 #include <stdint.h>
 #include <time.h>
@@ -9,6 +11,11 @@
 #define STATUS_BAR_LOG_USER(...) APP_LOG_USER("STATUS_BAR", __VA_ARGS__)
 #define STATUS_BAR_LOG_WARN(...) APP_LOG_WARN("STATUS_BAR", __VA_ARGS__)
 #define STATUS_BAR_LOG_ERROR(...) APP_LOG_ERROR("STATUS_BAR", __VA_ARGS__)
+
+#define BATTERY_FULL_LEVEL_PERCENT 80
+#define BATTERY_LINK_STATUS_DOCKED 0x01
+#define BATTERY_ICON_COLOR_NORMAL 0xffffff
+#define BATTERY_ICON_COLOR_CHARGING 0x00ff00
 
 // 静态变量，保存状态栏上的控件对象
 static lv_obj_t *status_container = NULL; //顶部状态栏对象指针
@@ -19,6 +26,12 @@ static lv_obj_t *battery_label = NULL;
 static lv_obj_t *time_label = NULL;
 static bool has_wifi_state = false;
 static bool last_wifi_connected = false;
+
+static bool status_bar_battery_is_charging(int battery_level)
+{
+    return last_link_status == BATTERY_LINK_STATUS_DOCKED &&
+           battery_level < BATTERY_FULL_LEVEL_PERCENT;
+}
 
 static void align_time_label(void)
 {
@@ -50,6 +63,7 @@ static void time_update_timer_cb(lv_timer_t *timer)
 {
     (void)timer;
     status_bar_update_time();
+    status_bar_update_battery(serial_mcu_battery_percent());
 }
 
 lv_obj_t *status_bar_create(lv_ui *ui)
@@ -120,7 +134,7 @@ lv_obj_t *status_bar_create(lv_ui *ui)
     status_bar_update_wifi(wifi_manager_is_connected());
 
     // 6. 立即更新一次电量
-    status_bar_update_battery(100);
+    status_bar_update_battery(serial_mcu_battery_percent());
 
     // 7. 启动定时器，每秒更新时间
     timer = lv_timer_create(time_update_timer_cb, 1000, NULL);
@@ -176,7 +190,12 @@ void status_bar_update_time(void)
 
 void status_bar_update_battery(int battery_level)
 {
-    if (battery_label == NULL) return;
+    uint32_t icon_color;
+
+    if (battery_label == NULL)
+    {
+        return;
+    }
 
     if (battery_level < 5)
     {
@@ -198,6 +217,10 @@ void status_bar_update_battery(int battery_level)
     {
         lv_label_set_text(battery_label, LV_SYMBOL_BATTERY_FULL);
     }
+
+    icon_color = status_bar_battery_is_charging(battery_level) ?
+                 BATTERY_ICON_COLOR_CHARGING : BATTERY_ICON_COLOR_NORMAL;
+    lv_obj_set_style_text_color(battery_label, lv_color_hex(icon_color), 0);
 }
 
 lv_obj_t *status_bar_get_container(void)

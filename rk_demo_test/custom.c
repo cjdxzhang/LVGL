@@ -78,55 +78,6 @@ void custom_ui_init(lv_ui *ui)
     app_manager_init(ui);
 }
 
-void custom_ui_load_scr_animation(lv_ui *ui, lv_obj_t **new_scr, bool new_scr_del,
-                                  bool *old_scr_del,
-                                  ui_setup_scr_t setup_scr, lv_screen_load_anim_t anim_type,
-                                  uint32_t time, uint32_t delay, bool is_clean, bool auto_del)
-{
-    lv_obj_t *act_scr = lv_screen_active();
-
-    LV_UNUSED(is_clean);
-    LV_UNUSED(auto_del);
-
-#if LV_USE_GUIDER_SIMULATOR && LV_USE_FREEMASTER
-#include "gg_external_data.h"
-    if (auto_del)
-    {
-        gg_edata_task_clear(act_scr);
-    }
-#endif
-
-    if (new_scr_del)
-    {
-        setup_scr(ui);
-    }
-
-    /*
-     * 屏幕缓存：强制不删除旧屏幕，实现界面复用。
-     *
-     * 问题根源：navigate_to_screen 每次切换都销毁旧界面、重建新界面，
-     * setup_scr → lv_obj_create(NULL) 创建新屏幕时，默认背景为白色。
-     * 在模拟器（PC）上渲染极快看不到，但在 RK3506B 上首帧渲染耗时
-     * 约半秒，白色背景短暂可见，形成白闪。
-     *
-     * 解决方案：将 auto_del 覆盖为 false——
-     *   - 每个界面只创建一次（首次 setup_scr 后常驻内存）
-     *   - 切走时保留，切回时直接复用已有对象
-     *   - 彻底消除因 recreate 带来的白屏延迟
-     */
-    lv_screen_load_anim(*new_scr, anim_type, time, delay, false);
-    *old_scr_del = false;
-}
-
-void __wrap_ui_load_scr_animation(lv_ui *ui, lv_obj_t **new_scr, bool new_scr_del,
-                                  bool *old_scr_del,
-                                  ui_setup_scr_t setup_scr, lv_screen_load_anim_t anim_type,
-                                  uint32_t time, uint32_t delay, bool is_clean, bool auto_del)
-{
-    custom_ui_load_scr_animation(ui, new_scr, new_scr_del, old_scr_del,
-                                 setup_scr, anim_type, time, delay, is_clean, auto_del);
-}
-
 const lv_font_t *custom_get_small_text_font(void)
 {
     custom_prepare_fonts();

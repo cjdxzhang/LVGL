@@ -17,10 +17,6 @@ extern "C" {
 
 void custom_init(lv_ui *ui);
 void custom_ui_init(lv_ui *ui);
-void custom_ui_load_scr_animation(lv_ui *ui, lv_obj_t **new_scr, bool new_scr_del,
-                                  bool *old_scr_del,
-                                  ui_setup_scr_t setup_scr, lv_screen_load_anim_t anim_type,
-                                  uint32_t time, uint32_t delay, bool is_clean, bool auto_del);
 const lv_font_t *custom_get_small_text_font(void);
 const lv_font_t *custom_get_dynamic_text_font(void);
 const lv_font_t *custom_get_compact_dynamic_text_font(void);

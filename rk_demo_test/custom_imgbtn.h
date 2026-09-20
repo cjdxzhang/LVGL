@@ -7,8 +7,6 @@
 extern int16_t
 to_preparing_flat; /* 记录转到preparing的标志 1--注水中，2--自清洁中，3--移动中，4--返回基站中*/
 extern int16_t
-to_setting_flat; /* 记录转到setting的标志 1--从index跳转，2--从working跳转 */
-extern int16_t
 to_location_flat; /* 记录转到location的标志 1--从index跳转，2--从working跳转 3--从preparing跳转 */
 typedef enum
 {
@@ -42,47 +40,34 @@ lv_obj_t *imgbtn_create_without_bg(lv_obj_t *parent, const void *img_src, const 
 bool navigate_to_screen(ui_screen_id_t target_screen);
 ui_screen_id_t get_current_screen_id(void);
 const char *get_current_screen_name(void);
-void setting_back(lv_event_t *e);
-/**  clicked事件，从setting->index **/
-void setting_to_index(lv_event_t *e);
+/**  clicked事件，退出设置链路并返回入口页面 **/
+void setting_exit_to_entry(lv_event_t *e);
 /**  clicked事件，从index->setting **/
 void index_to_setting(lv_event_t *e);
 /**  clicked事件，从setting->conf_mode **/
 void setting_to_conf_mode(lv_event_t *e);
 /**  clicked事件，从conf_mode->setting **/
 void conf_mode_to_setting(lv_event_t *e);
-/**  clicked事件，从conf_mode->index **/
-void conf_mode_to_index(lv_event_t *e);
-/**  clicked事件，从conf_mode_detail->index **/
-void conf_mode_detail_to_index(lv_event_t *e);
 /**  clicked事件，从conf_mode->conf_mode_detail **/
 void conf_mode_to_conf_mode_detail(lv_event_t *e);
 /**  clicked事件，从conf_mode_detail->conf_mode **/
 void conf_mode_detail_to_conf_mode(lv_event_t *e);
 
-/**  clicked事件，从conf_wifi->index **/
-void conf_wifi_to_index(lv_event_t *e);
 /**  clicked事件，从conf_wifi->setting **/
 void conf_wifi_to_setting(lv_event_t *e);
 /**  clicked事件，从setting->conf_wifi **/
 void setting_to_conf_wifi(lv_event_t *e);
 
-/**  clicked事件，从conf_advance->index **/
-void conf_advance_to_index(lv_event_t *e);
 /**  clicked事件，从conf_advance->setting **/
 void conf_advance_to_setting(lv_event_t *e);
 /**  clicked事件，从setting->conf_advance **/
 void setting_to_conf_advance(lv_event_t *e);
 
-/**  clicked事件，从conf_other->index **/
-void conf_other_to_index(lv_event_t *e);
 /**  clicked事件，从conf_other->setting **/
 void conf_other_to_setting(lv_event_t *e);
 /**  clicked事件，从setting->conf_other **/
 void setting_to_conf_other(lv_event_t *e);
 
-/**  clicked事件，从conf_location->index **/
-void conf_location_to_index(lv_event_t *e);
 /**  clicked事件，从conf_location->setting **/
 void conf_location_to_setting(lv_event_t *e);
 /**  clicked事件，从setting->conf_location **/
@@ -114,9 +99,6 @@ void working_to_preparing_back(lv_event_t *e);
 
 /**  clicked事件，从working->setting **/
 void working_to_setting(lv_event_t *e);
-/**  clicked事件，从setting->working **/
-void setting_to_working(lv_event_t *e);
-
 /**  clicked事件，从working->location**/
 void working_to_location(lv_event_t *e);
 /**  clicked事件，从location->working **/
@@ -154,4 +136,7 @@ void show_message_dialog_and_navigate(lv_obj_t *parent,
 
 /** 清理当前仍存在的通用提示对话框。 */
 void message_dialog_cleanup(void);
+void mcu_outage_guard_show_delayed(uint32_t delay_ms);
+void mcu_outage_guard_show(lv_obj_t *screen);
+void mcu_outage_guard_destroy(void);
 #endif

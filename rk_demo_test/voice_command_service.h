@@ -1,20 +1,21 @@
 #ifndef VOICE_COMMAND_SERVICE_H
 #define VOICE_COMMAND_SERVICE_H
 
+#include <stdbool.h>
+
 typedef enum
 {
     VOICE_COMMAND_UNKNOWN = 0,
     VOICE_COMMAND_WAKEUP_ACK,
     VOICE_COMMAND_SLEEP_ACK,
     VOICE_COMMAND_FOOTBATH_START,
+    VOICE_COMMAND_FOOTBATH_CONTINUE,
     VOICE_COMMAND_FOOTBATH_STOP,
     VOICE_COMMAND_MASSAGE_START,
     VOICE_COMMAND_MASSAGE_STOP,
     VOICE_COMMAND_TEMP_UP,
     VOICE_COMMAND_TEMP_DOWN,
     VOICE_COMMAND_GO_HOME,
-    VOICE_COMMAND_DRY_START,
-    VOICE_COMMAND_DRY_STOP,
     VOICE_COMMAND_CLEAN_START,
     VOICE_COMMAND_CLEAN_STOP,
     VOICE_COMMAND_STOP_ALL,
@@ -22,7 +23,15 @@ typedef enum
     VOICE_COMMAND_NOISE
 } voice_command_t;
 
+typedef enum
+{
+    VOICE_PROMPT_FOOTBATH_FINISH = 0,
+    VOICE_PROMPT_CLEAN_FINISH,
+    VOICE_PROMPT_BAD_STATUS
+} voice_prompt_t;
+
 int voice_command_service_init(void);
 void voice_command_service_deinit(void);
+bool voice_command_service_play_prompt(voice_prompt_t prompt);
 
 #endif

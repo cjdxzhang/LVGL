@@ -11,12 +11,15 @@
 #include "self_clean_flow.h"
 #include "events_init.h"
 #include "robot_tcp.h"
+#include "voice_command_service.h"
+#include "page_initialized.h"
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <math.h>
 #include <time.h>
+#include <unistd.h>
 
 #define SYSTEM_MANAGER_LOG_USER(...) APP_LOG_USER("SYSTEM_MANAGER", __VA_ARGS__)
 #define SYSTEM_MANAGER_LOG_WARN(...) APP_LOG_WARN("SYSTEM_MANAGER", __VA_ARGS__)
@@ -25,11 +28,12 @@
 #define MODE_SETTINGS_DIR "./temp"
 #define MODE_SETTINGS_PATH "./temp/mode_settings.bin"
 #define MODE_SETTINGS_MAGIC 0x4d4f4445u
-#define MODE_SETTINGS_VERSION 2u
+#define MODE_SETTINGS_VERSION 3u
+#define MODE_SETTINGS_TMP_PATH MODE_SETTINGS_PATH ".tmp"
 #define LOCATION_SETTINGS_DIR "./temp"
 #define LOCATION_SETTINGS_PATH "./temp/location_settings.bin"
 #define LOCATION_SETTINGS_MAGIC 0x4c4f4341u
-#define LOCATION_SETTINGS_VERSION 1u
+#define LOCATION_SETTINGS_VERSION 2u
 #define CONF_MODE_GRID_COLS 3
 #define CONF_MODE_BTN_WIDTH 160
 #define CONF_MODE_BTN_HEIGHT 150
@@ -75,8 +79,21 @@
 #define BUCKET_STANDBY_ARC_COMPLETE_ANGLE 359
 #define SELF_CLEAN_FINISH_AUTO_RETURN_MS 120000
 #define MCU_REPORT_WATCHDOG_PERIOD_MS 1000u
-#define MCU_REPORT_TIMEOUT_MS 10000u
-#define AUTO_WATER_NAVIGATION_TARGET_NAME_LEN 64u
+#define MCU_REPORT_TIMEOUT_MS 5000u
+#define MCU_OUTAGE_GUARD_SHOW_DELAY_MS 200u
+#define MCU_LOW_BATTERY_THRESHOLD_PERCENT 20u
+/* 与版本2磁盘布局保持一致，仅用于一次性迁移。 */
+typedef struct
+{
+    char name[SYSTEM_MODE_NAME_LEN];
+    int icon_id;
+    uint32_t time_sec;
+    uint8_t water_level;
+    int16_t temperature;
+    bool use_drug1;
+    bool use_drug2;
+    int position;
+} system_mode_v2_t;
 
 #define CONF_LOCATION_MODE_OPTIONS_LEN ((SYSTEM_MODE_NAME_LEN + 1) * SYSTEM_MODE_MAX_COUNT)
 
@@ -95,6 +112,15 @@ typedef struct
     uint32_t count;
     system_location_t locations[SYSTEM_LOCATION_MAX_COUNT];
 } system_location_store_t;
+
+/* 旧位置文件只迁移名称对应的偏好，绝不恢复站点列表和坐标。 */
+typedef struct
+{
+    char name[32];
+    int index;
+    int default_mode_index;
+    system_location_coord_t coord;
+} system_location_v1_t;
 
 // 用于存储需要动态更新的控件句柄（以便在定时器中修改）
 typedef struct
@@ -153,11 +179,15 @@ typedef struct
 
 typedef struct
 {
-    char target_name[AUTO_WATER_NAVIGATION_TARGET_NAME_LEN];
+    StationInfo_t target_station;
+    bool has_target;
     bool active;
     bool completion_handled;
+    bool navigation_arrived;
     uint8_t previous_base_status;
     uint32_t last_report_sequence;
+    int16_t target_temperature;
+    uint32_t target_time_sec;
 } auto_water_navigation_flow_t;
 
 static cleaning_ui_t cleaning_ui;
@@ -166,20 +196,21 @@ static bucket_countdown_state_t g_bucket_countdown = {0};
 static bucket_standby_state_t g_bucket_standby = {0};
 static self_clean_flow_t g_self_clean_flow = {0};
 static auto_water_navigation_flow_t g_auto_water_navigation = {0};
-static int g_auto_water_target_location_index = -1;
+static char g_mode_edit_station_name[SYSTEM_LOCATION_NAME_LEN];
 static system_base_flow_t g_base_flow = SYSTEM_BASE_FLOW_IDLE;
-static bool g_drying_active_reported = false;
+
 static int16_t g_applied_link_status = -1;
 static lv_timer_t *g_mcu_report_watchdog_timer = NULL;
 static uint32_t g_mcu_watchdog_last_sequence = 0u;
 static uint32_t g_mcu_watchdog_last_report_tick = 0u;
-static bool g_mcu_watchdog_outage_latched = false;
+static system_mcu_link_state_t g_mcu_link_state = SYSTEM_MCU_LINK_UNKNOWN;
+static uint8_t g_mcu_pending_link_status = LINK_STATUS_DOCKED;
+static bool g_mcu_status_ui_pending = false;
+static bool g_mcu_low_battery_handled = false;
 
 /* 全局变量定义（在头文件中用 extern 声明，在此处给出唯一定义） */
 int16_t last_link_status =
     LINK_STATUS_DOCKED; /* 开机默认位于基站，收到有效帧后再更新 */
-bool has_mcu_status_report =
-    false; /* 是否已收到有效 MCU 状态帧，避免默认 LINK_STATUS 误触发页面切换 */
 int16_t temp_set = 35;        /* 温度设置值，单位 °C */
 uint32_t timer_set = 600;    /* 定时设置值，单位 秒 */
 uint32_t remaining_seconds = 0; /* 桶体本地倒计时剩余秒数 */
@@ -223,15 +254,6 @@ int massage_intensity = 0; /* 按摩强度 */
 int current_location = 0; /* 0--基站 1，2,3,4,5.....当前定位索引 */
 int going_to_location = 0; /* 目标定位索引 */
 
-bool _is_index_page_initialized = false;
-bool _is_setting_page_initialized = false;
-bool _is_location_page_initialized = false;
-bool _is_working_page_initialized = false;
-bool _is_conf_mode_page_initialized = false;
-bool _is_conf_location_page_initialized = false;
-bool _is_conf_mode_detail_page_initialized = false;
-bool _is_preparing_page_initialized = false;
-
 static system_mode_t g_mode_settings[SYSTEM_MODE_MAX_COUNT];
 system_location_t g_location_settings[SYSTEM_LOCATION_MAX_COUNT];
 static size_t g_mode_count = 0;
@@ -241,8 +263,6 @@ int current_selected_location_index = 0;
 static lv_obj_t *g_conf_mode_cont_2 = NULL;
 
 static uint32_t g_preparing_countdown_remaining = 0;
-static lv_obj_t *g_working_pause_btn = NULL;
-static lv_obj_t *g_working_play_btn = NULL;
 static lv_timer_t *g_preparing_page_timer = NULL;
 static lv_obj_t *g_self_clean_finish_button = NULL;
 static lv_timer_t *g_self_clean_finish_timer = NULL;
@@ -250,10 +270,6 @@ static lv_timer_t *g_working_return_dialog_timer = NULL;
 static lv_timer_t *g_working_timer = NULL;
 lv_timer_t *g_auto_drain_timer = NULL;
 static int32_t g_working_return_dialog_countdown = 0;
-
-/* 等待基站连接的重试计数 */
-#define WAIT_LINK_MAX_RETRY 5
-static int g_wait_link_retry_count = 0;
 
 /* ========== 机器人导航相关 ========== */
 static float g_nav_target_x = 0.0f;       /* 导航目标X坐标 */
@@ -263,12 +279,15 @@ static int   g_nav_timeout_count = 0;     /* 导航超时计数（秒） */
 #define NAV_TIMEOUT_SEC   120              /* 导航最大等待秒数 */
 #define NAV_ARRIVED_TOL   0.5f             /* 到达判定距离阈值（米） */
 
+static bool g_return_base_pending = false;
+static uint32_t g_return_base_report_sequence = 0u;
+static uint32_t g_mcu_docked_report_sequence = 0u;
 static lv_timer_t *g_nav_check_timer = NULL; /* 导航状态轮询定时器 */
 
 static int persist_mode_settings(void);
+static int persist_location_settings(void);
 
 static void build_mode_dropdown_options(char *options, size_t options_size);
-static void conf_location_name_changed(lv_event_t *e);
 static void conf_location_default_mode_changed(lv_event_t *e);
 static void conf_location_apply_label_style(lv_obj_t *label);
 static void conf_location_apply_textarea_style(lv_ui *ui, lv_obj_t *textarea);
@@ -283,7 +302,22 @@ static void update_self_cleaning_progress(lv_ui *ui);
 static void preparing_screen_lifecycle_cb(lv_event_t *e);
 static void self_clean_finish_cleanup(void);
 static void self_clean_finish_show(lv_ui *ui);
-static void working_screen_lifecycle_cb(lv_event_t *e);
+static bool system_location_is_selectable_station(const StationInfo_t *station);
+static int system_location_find_by_station_id(const system_location_t *locations,
+        size_t count,
+        int station_id);
+static int system_location_find_by_name(const system_location_t *locations,
+                                        size_t count,
+                                        const char *name);
+static void system_location_update_entry_from_station(system_location_t *location,
+        const StationInfo_t *station);
+static int system_location_resolve_station(const char *target_name,
+        int target_location_index,
+        StationInfo_t *station);
+static void system_location_sync_from_robot_cache_async(void *user_data);
+static void system_location_refresh_pages(lv_ui *ui);
+static void mode_station_dropdown_refresh(lv_ui *ui);
+static void mode_station_changed(lv_event_t *e);
 static bool bucket_temp_valid(int16_t temp);
 static int16_t bucket_temp_clamp(int temp);
 static int16_t bucket_temp_base_value(void);
@@ -305,27 +339,30 @@ static void bucket_countdown_refresh(void);
 static void bucket_countdown_reset_confirm_timer(void);
 static void bucket_countdown_cancel_edit(void);
 static void bucket_auto_start_cancel(void);
-static void bucket_auto_start_detached(void);
+static void bucket_start_after_auto_water_navigation(void);
+static bool auto_water_navigation_try_start_bucket(void);
 static void bucket_working_sync_function_icons(lv_ui *ui);
 static void bucket_standby_cancel_press(void);
 static void bucket_standby_page_cleanup(void);
 static void index_sync_selection_ui(lv_ui *ui);
 
 static void auto_water_navigation_flow_arm(auto_water_navigation_flow_t *flow,
-        const char *target_name, uint32_t report_sequence)
+        const StationInfo_t *target, uint32_t report_sequence)
 {
     if (flow == NULL)
     {
         return;
     }
     memset(flow, 0, sizeof(*flow));
-    if (target_name != NULL)
+    if (target != NULL)
     {
-        strncpy(flow->target_name, target_name,
-                sizeof(flow->target_name) - 1u);
+        flow->target_station = *target;
+        flow->has_target = true;
     }
     flow->active = true;
     flow->last_report_sequence = report_sequence;
+    flow->target_temperature = temp_set;
+    flow->target_time_sec = timer_set;
 }
 
 static void auto_water_navigation_flow_cancel(auto_water_navigation_flow_t *flow)
@@ -356,11 +393,6 @@ static bool auto_water_navigation_flow_observe(auto_water_navigation_flow_t *flo
     return completed;
 }
 
-static const char *auto_water_navigation_flow_target(
-    const auto_water_navigation_flow_t *flow)
-{
-    return flow == NULL ? "" : flow->target_name;
-}
 
 const char *system_base_flow_name(system_base_flow_t flow)
 {
@@ -372,8 +404,6 @@ const char *system_base_flow_name(system_base_flow_t flow)
         return "WATERING";
     case SYSTEM_BASE_FLOW_SELF_CLEANING:
         return "SELF_CLEANING";
-    case SYSTEM_BASE_FLOW_DRYING:
-        return "DRYING";
     case SYSTEM_BASE_FLOW_MOVING:
         return "MOVING";
     default:
@@ -403,6 +433,10 @@ static const char *system_action_source_name(system_action_source_t source)
 
 bool system_base_flow_try_start(system_base_flow_t flow, const char *source)
 {
+    if (flow == SYSTEM_BASE_FLOW_MOVING && g_base_flow == SYSTEM_BASE_FLOW_MOVING)
+    {
+        return true;
+    }
     if (flow == SYSTEM_BASE_FLOW_IDLE || g_base_flow != SYSTEM_BASE_FLOW_IDLE)
     {
         SYSTEM_MANAGER_LOG_WARN("基站流程启动被拒绝: source=%s request=%s active=%s",
@@ -412,10 +446,6 @@ bool system_base_flow_try_start(system_base_flow_t flow, const char *source)
         return false;
     }
     g_base_flow = flow;
-    if (flow == SYSTEM_BASE_FLOW_DRYING)
-    {
-        g_drying_active_reported = false;
-    }
     SYSTEM_MANAGER_LOG_USER("基站流程已占用: source=%s flow=%s",
                             source == NULL ? "<unknown>" : source,
                             system_base_flow_name(flow));
@@ -438,7 +468,7 @@ system_command_decision_t system_base_flow_request_start(
         decision.reason = "invalid-flow";
         return decision;
     }
-    if (flow != SYSTEM_BASE_FLOW_MOVING && !has_mcu_status_report)
+    if (system_mcu_link_state_get() != SYSTEM_MCU_LINK_ONLINE)
     {
         SYSTEM_MANAGER_LOG_WARN(
             "基站流程启动被拒绝: source=%s request=%s reason=no-valid-mcu-status",
@@ -449,8 +479,7 @@ system_command_decision_t system_base_flow_request_start(
         decision.reason = "no-valid-mcu-status";
         return decision;
     }
-    if (flow != SYSTEM_BASE_FLOW_MOVING &&
-            last_link_status != LINK_STATUS_DOCKED)
+    if (flow != SYSTEM_BASE_FLOW_MOVING && last_link_status != LINK_STATUS_DOCKED)
     {
         SYSTEM_MANAGER_LOG_WARN(
             "基站流程启动被拒绝: source=%s request=%s reason=docked-required link=%d",
@@ -485,7 +514,6 @@ void system_base_flow_finish(system_base_flow_t expected, const char *source)
                             source == NULL ? "<unknown>" : source,
                             system_base_flow_name(expected));
     g_base_flow = SYSTEM_BASE_FLOW_IDLE;
-    g_drying_active_reported = false;
 }
 
 system_bucket_state_t system_bucket_state_get(void)
@@ -516,54 +544,115 @@ const char *system_bucket_state_name(system_bucket_state_t state)
     }
 }
 
-// 自动上水完成后，导航到指定站点
 static int system_start_navigation(lv_obj_t *dialog_parent,
                                    const char *target_name,
-                                   int target_location_index)
+                                   int target_location_index,
+                                   const StationInfo_t *snapshot)
 {
+    StationInfo_t resolved_station = {0};
+    bool was_moving = g_base_flow == SYSTEM_BASE_FLOW_MOVING;
+    int location_index;
     int result;
 
-    LV_UNUSED(target_name);
-
-    if (!system_base_flow_try_start(SYSTEM_BASE_FLOW_MOVING, "navigation"))
+    if (system_base_flow_request_start(SYSTEM_BASE_FLOW_MOVING,
+                                       SYSTEM_ACTION_SOURCE_UI).result !=
+            SYSTEM_COMMAND_ACCEPTED)
     {
+        system_auto_water_navigation_cancel();
         return -1;
     }
-    serial_base_standby();
-    result = RobotTcp_GotoStationById(target_location_index);
+
+    if (snapshot != NULL)
+    {
+        resolved_station = *snapshot;
+        result = 0;
+    }
+    else
+    {
+        result = system_location_resolve_station(target_name, target_location_index,
+                 &resolved_station);
+    }
 
     if (result != 0)
     {
-        SYSTEM_MANAGER_LOG_ERROR("导航启动失败: station_id=%d ret=%d",
-                                 target_location_index, result);
+        SYSTEM_MANAGER_LOG_ERROR("导航目标解析失败: request_id=%d name=%s ret=%d",
+                                 target_location_index,
+                                 target_name == NULL ? "<null>" : target_name,
+                                 result);
         show_message_dialog_and_navigate(dialog_parent,
                                          "导航失败: 未找到目标站点",
                                          UI_SCREEN_INDEX);
         system_base_flow_finish(SYSTEM_BASE_FLOW_MOVING,
-                                "navigation-submit-failed");
+                                "navigation-resolve-failed");
+        system_auto_water_navigation_cancel();
         return result;
     }
-    result = RobotTcp_GetStationCoordsById(target_location_index,
-                                           &g_nav_target_x,
-                                           &g_nav_target_y,
-                                           &g_nav_target_z, NULL, 0);
+    location_index = system_location_find_by_station_id(g_location_settings,
+                     g_location_count,
+                     resolved_station.id);
+    if (location_index < 0 && target_name != NULL && target_name[0] != '\0')
+    {
+        location_index = system_location_find_by_name(g_location_settings,
+                         g_location_count,
+                         target_name);
+    }
+    if (location_index >= 0 && snapshot == NULL)
+    {
+        system_location_update_entry_from_station(&g_location_settings[location_index],
+                &resolved_station);
+        if (persist_location_settings() != 0)
+        {
+            SYSTEM_MANAGER_LOG_WARN("导航前刷新定位配置保存失败: station_id=%d",
+                                    resolved_station.id);
+        }
+    }
+
+    serial_base_standby();
+    result = RobotTcp_SendGoto(resolved_station.x,
+                               resolved_station.y,
+                               resolved_station.z);
+
     if (result != 0)
     {
-        SYSTEM_MANAGER_LOG_ERROR("获取站点坐标失败: station_id=%d",
-                                 target_location_index);
+        SYSTEM_MANAGER_LOG_ERROR("导航启动失败: station_id=%d name=%s ret=%d",
+                                 resolved_station.id,
+                                 resolved_station.name,
+                                 result);
         show_message_dialog_and_navigate(dialog_parent,
-                                         "导航失败: 无法获取站点坐标",
+                                         "导航失败: 未发送到代理",
                                          UI_SCREEN_INDEX);
         system_base_flow_finish(SYSTEM_BASE_FLOW_MOVING,
-                                "navigation-coordinate-failed");
+                                "navigation-submit-failed");
+        system_auto_water_navigation_cancel();
         return result;
     }
-    going_to_location = target_location_index;
+
+    g_nav_target_x = resolved_station.x;
+    g_nav_target_y = resolved_station.y;
+    g_nav_target_z = resolved_station.z;
+    g_nav_timeout_count = 0;
+    going_to_location = resolved_station.id;
+    SYSTEM_MANAGER_LOG_USER("导航目标已解析: request_id=%d resolved_id=%d name=%s pos=(%.2f, %.2f, %.2f)",
+                            target_location_index,
+                            resolved_station.id,
+                            resolved_station.name,
+                            resolved_station.x,
+                            resolved_station.y,
+                            resolved_station.z);
+    g_return_base_pending = false;
+    g_auto_water_navigation.navigation_arrived = false;
     to_preparing_flat = 3;
-    if (!navigate_to_screen(UI_SCREEN_PREPARING))
+    if (lv_screen_active() == guider_ui.preparing &&
+            (!was_moving || g_nav_check_timer == NULL))
+    {
+        /* 同页业务模式转换不会触发加载事件，需要显式启动移动显示和检测。 */
+        preparing_page_init(&guider_ui);
+    }
+    else if (!was_moving && !navigate_to_screen(UI_SCREEN_PREPARING))
     {
         /* 底盘命令已经提交，保持 MOVING 互斥直到状态轮询结束。 */
         SYSTEM_MANAGER_LOG_ERROR("导航已提交但准备页切换失败，保持移动互斥");
+        system_auto_water_navigation_cancel();
     }
     return 0;
 }
@@ -638,15 +727,13 @@ static void working_return_dialog_start_countdown(void)
 
     if (!working_return_dialog_obj_is_valid(guider_ui.working_btn_yes) ||
             !working_return_dialog_obj_is_valid(guider_ui.working_btn_no) ||
+            !working_return_dialog_obj_is_valid(guider_ui.working_btn_yes_label) ||
             !working_return_dialog_obj_is_valid(guider_ui.working_btn_no_label))
     {
         return;
     }
 
-    lv_obj_set_style_text_font(guider_ui.working_btn_yes,
-                               custom_get_compact_dynamic_text_font(),
-                               LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(guider_ui.working_btn_no,
+    lv_obj_set_style_text_font(guider_ui.working_btn_yes_label,
                                custom_get_compact_dynamic_text_font(),
                                LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_font(guider_ui.working_btn_no_label,
@@ -677,6 +764,30 @@ static void auto_drain_timer_cb(lv_timer_t *timer)
     serial_base_force_drain();
 }
 
+/* 回仓使用本轮命令后的 MCU 连接确认，不复用普通导航目标坐标。 */
+static bool preparing_return_base_try_finish(void)
+{
+    if (!g_return_base_pending || g_base_flow != SYSTEM_BASE_FLOW_MOVING ||
+            to_preparing_flat != 4 ||
+            system_mcu_link_state_get() != SYSTEM_MCU_LINK_ONLINE ||
+            last_link_status != LINK_STATUS_DOCKED ||
+            __atomic_load_n(&g_mcu_docked_report_sequence, __ATOMIC_ACQUIRE) ==
+            g_return_base_report_sequence)
+    {
+        return false;
+    }
+    if (!navigate_to_screen(UI_SCREEN_INDEX))
+    {
+        return false;
+    }
+    g_return_base_pending = false;
+    current_location = 0;
+    to_preparing_flat = 0;
+    preparing_common_cleanup();
+    system_base_flow_finish(SYSTEM_BASE_FLOW_MOVING, "return-base-connected");
+    return true;
+}
+
 /* ========== 导航轮询定时器回调 ========== */
 static void preparing_nav_check_timer_cb(lv_timer_t *timer)
 {
@@ -686,38 +797,86 @@ static void preparing_nav_check_timer_cb(lv_timer_t *timer)
         return;
     }
 
+    if (to_preparing_flat == 4)
+    {
+        (void)preparing_return_base_try_finish();
+        return;
+    }
+
     RobotState_t state = {0};
 
     (void)RobotTcp_RequestStatus();
     RobotTcp_GetState(&state);
+
+    /* 打印目标位置信息 */
+    SYSTEM_MANAGER_LOG_USER("[导航检查] 目标位置: x=%.3f, y=%.3f, z=%.3f",
+                            g_nav_target_x, g_nav_target_y, g_nav_target_z);
+
+    /* 打印当前位置信息 */
+    SYSTEM_MANAGER_LOG_USER("[导航检查] 当前位置: x=%.3f, y=%.3f, z=%.3f",
+                            state.pos.x, state.pos.y, state.pos.z);
+
+    /* 打印电量和地图信息 */
+    SYSTEM_MANAGER_LOG_USER("[导航检查] 电量=%.1f%%, 地图=%s, innavmap=%d, emgStop=%d",
+                            state.battery_percent,
+                            state.map_name,
+                            state.in_nav_map,
+                            state.is_emg_stop);
 
     /* 计算当前位置与目标点的欧几里得距离 */
     float dx = state.pos.x - g_nav_target_x;
     float dy = state.pos.y - g_nav_target_y;
     float dist = sqrtf(dx * dx + dy * dy);
 
-    if (dist <= NAV_ARRIVED_TOL && last_link_status == 0)
+    SYSTEM_MANAGER_LOG_USER("[导航检查] 距离目标: %.3f (容差: %.3f)", dist, NAV_ARRIVED_TOL);
+
+    if (dist <= NAV_ARRIVED_TOL)
     {
-        /* 判定是否到达目的地 并且机器人与基站断开连接*/
-        SYSTEM_MANAGER_LOG_USER("到达导航目的地: target=(%.2f, %.2f)",
-                                g_nav_target_x, g_nav_target_y);
-        if (g_nav_check_timer != NULL)
-        {
-            lv_timer_delete(g_nav_check_timer);
-            g_nav_check_timer = NULL;
-        }
+        SYSTEM_MANAGER_LOG_USER("[导航检查] ===== 到达目的地! =====");
+        SYSTEM_MANAGER_LOG_USER("[导航检查] target=(%.3f, %.3f), current=(%.3f, %.3f), dist=%.3f",
+                                g_nav_target_x, g_nav_target_y,
+                                state.pos.x, state.pos.y, dist);
         g_nav_timeout_count = 0;
-        system_base_flow_finish(SYSTEM_BASE_FLOW_MOVING,
-                                "navigation-arrived");
-        preparing_move_finished(timer);
-        return;
+        if (g_auto_water_navigation.active &&
+                g_auto_water_navigation.completion_handled)
+        {
+            if (g_nav_check_timer != NULL)
+            {
+                lv_timer_delete(g_nav_check_timer);
+                g_nav_check_timer = NULL;
+            }
+            g_auto_water_navigation.navigation_arrived = true;
+            if (!auto_water_navigation_try_start_bucket())
+            {
+                SYSTEM_MANAGER_LOG_USER(
+                    "自动上水导航已到达，等待 LINK_STATUS=0x00");
+            }
+            return;
+        }
+        if (last_link_status == LINK_STATUS_DETACHED)
+        {
+            system_base_flow_finish(SYSTEM_BASE_FLOW_MOVING,
+                                    "navigation-arrived");
+            preparing_move_finished(timer);
+            if (g_nav_check_timer != NULL)
+            {
+                lv_timer_delete(g_nav_check_timer);
+                g_nav_check_timer = NULL;
+            }
+            return;
+        }
     }
 
     /* 超时检查 */
     g_nav_timeout_count++;
+    SYSTEM_MANAGER_LOG_USER("[导航检查] 已等待 %d 秒 / 超时阈值 %d 秒",
+                            g_nav_timeout_count, NAV_TIMEOUT_SEC);
+
     if (g_nav_timeout_count >= NAV_TIMEOUT_SEC)
     {
-        SYSTEM_MANAGER_LOG_WARN("导航超时，取消导航: timeout=%ds", NAV_TIMEOUT_SEC);
+        SYSTEM_MANAGER_LOG_WARN("[导航检查] ===== 导航超时! 取消导航 =====");
+        SYSTEM_MANAGER_LOG_WARN("[导航检查] 超时时间: %ds, 最后位置: (%.3f, %.3f)",
+                                NAV_TIMEOUT_SEC, state.pos.x, state.pos.y);
         if (g_nav_check_timer != NULL)
         {
             lv_timer_delete(g_nav_check_timer);
@@ -726,6 +885,7 @@ static void preparing_nav_check_timer_cb(lv_timer_t *timer)
         g_nav_timeout_count = 0;
         system_base_flow_finish(SYSTEM_BASE_FLOW_MOVING,
                                 "navigation-timeout");
+        system_auto_water_navigation_cancel();
         /* 超时后显示提示，回到首页 */
         show_message_dialog_and_navigate(ui->preparing,
                                          "导航超时，请检查机器人状态",
@@ -827,16 +987,16 @@ static void self_clean_finish_show(lv_ui *ui)
     }
 }
 
-void preparing_page_cleanup(void)
+// 清理准备页的定时器和对话框资源
+void preparing_common_cleanup(void)
 {
-    /* 清理导航轮询定时器 */
+    g_return_base_pending = false;
     if (g_nav_check_timer != NULL)
     {
         lv_timer_delete(g_nav_check_timer);
         g_nav_check_timer = NULL;
     }
     g_nav_timeout_count = 0;
-    g_wait_link_retry_count = 0;
 
     if (g_preparing_page_timer != NULL)
     {
@@ -844,37 +1004,22 @@ void preparing_page_cleanup(void)
         g_preparing_page_timer = NULL;
     }
 
-    cleaning_animation_cleanup();
-    self_clean_flow_stop(&g_self_clean_flow);
-    self_clean_finish_cleanup();
-
-    /* stop_dialog_cleanup 内部已做对象有效性检查，可直接调用 */
     stop_dialog_cleanup();
     message_dialog_cleanup();
 }
 
-/** 停止自动上水并返回首页。 */
-void auto_water_page_stop(lv_event_t *e)
+void auto_water_page_cleanup(void)
 {
-    lv_event_code_t code = lv_event_get_code(e);
-    if (code != LV_EVENT_CLICKED)
-    {
-        return;
-    }
-    if (to_preparing_flat != 1)
-    {
-        SYSTEM_MANAGER_LOG_WARN("忽略非自动上水停止请求: preparing_flow=%d active=%s",
-                                to_preparing_flat,
-                                system_base_flow_name(g_base_flow));
-        return;
-    }
-
-    serial_base_standby();
     system_auto_water_navigation_cancel();
-    system_base_flow_finish(SYSTEM_BASE_FLOW_WATERING,
-                            "water-ui-stop");
-    preparing_to_index(e);
 }
+
+void self_clean_page_cleanup(void)
+{
+    cleaning_animation_cleanup();
+    self_clean_flow_stop(&g_self_clean_flow);
+    self_clean_finish_cleanup();
+}
+
 static void preparing_screen_lifecycle_cb(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
@@ -883,28 +1028,27 @@ static void preparing_screen_lifecycle_cb(lv_event_t *e)
     {
         if (to_preparing_flat == 1)
         {
-            system_auto_water_navigation_cancel();
+            auto_water_page_cleanup();
         }
-        preparing_page_cleanup();
+        else if (to_preparing_flat == 2)
+        {
+            self_clean_page_cleanup();
+        }
+        preparing_common_cleanup();
     }
 }
 
-static void working_screen_lifecycle_cb(lv_event_t *e)
+void system_manager_working_page_cleanup(void)
 {
-    lv_event_code_t code = lv_event_get_code(e);
-
-    if (code == LV_EVENT_SCREEN_UNLOAD_START || code == LV_EVENT_DELETE)
+    bucket_standby_page_cleanup();
+    bucket_temp_clear_edit(NULL);
+    g_bucket_countdown.display_label = NULL;
+    if (g_working_timer != NULL)
     {
-        bucket_standby_page_cleanup();
-        bucket_temp_clear_edit(NULL);
-        g_bucket_countdown.display_label = NULL;
-        if (g_working_timer != NULL)
-        {
-            lv_timer_del(g_working_timer);
-            g_working_timer = NULL;
-        }
-        working_return_dialog_cleanup();
+        lv_timer_del(g_working_timer);
+        g_working_timer = NULL;
     }
+    working_return_dialog_cleanup();
 }
 
 static bool bucket_temp_valid(int16_t temp)
@@ -1131,6 +1275,10 @@ static void bucket_temp_step(lv_ui *ui, int delta)
     {
         return;
     }
+    if (system_mcu_link_state_get() != SYSTEM_MCU_LINK_ONLINE)
+    {
+        return;
+    }
     // 根据当前编辑状态和delta，计算目标温度
     target = bucket_temp_clamp((int)bucket_temp_base_value() + delta);
     bucket_temp_start_edit(ui->working_label_temperature, target);
@@ -1234,7 +1382,7 @@ static void bucket_countdown_blink_timer_cb(lv_timer_t *timer)
     bucket_countdown_set_label_visible(true);
     g_bucket_countdown.editing = false;
     g_bucket_countdown.button_option_index = 0u;
-    bucket_countdown_start(timer_set);
+    system_bucket_timer_apply();
     SYSTEM_MANAGER_LOG_USER("桶体定时确认完成，开始倒计时: %us",
                             (unsigned int)timer_set);
 }
@@ -1262,7 +1410,7 @@ static void bucket_countdown_confirm_timer_cb(lv_timer_t *timer)
 
     g_bucket_countdown.editing = false;
     g_bucket_countdown.button_option_index = 0u;
-    bucket_countdown_start(timer_set);
+    system_bucket_timer_apply();
 }
 
 static void bucket_countdown_reset_confirm_timer(void)
@@ -1286,9 +1434,10 @@ static void bucket_countdown_reset_confirm_timer(void)
     SYSTEM_MANAGER_LOG_ERROR("创建桶体定时确认 timer 失败，直接启动倒计时");
     g_bucket_countdown.editing = false;
     g_bucket_countdown.button_option_index = 0u;
-    bucket_countdown_start(timer_set);
+    system_bucket_timer_apply();
 }
 
+// 刷新桶体工作页面图标显示
 static void bucket_working_sync_function_icons(lv_ui *ui)
 {
     if (ui == NULL)
@@ -1356,6 +1505,97 @@ static void bucket_working_sync_function_icons(lv_ui *ui)
             lv_obj_add_flag(ui->working_img_massage_intensity2, LV_OBJ_FLAG_HIDDEN);
         }
     }
+}
+
+static bool system_bucket_control_is_allowed(const char *operation)
+{
+    system_bucket_state_t bucket_state;
+
+    if (system_mcu_link_state_get() != SYSTEM_MCU_LINK_ONLINE)
+    {
+        SYSTEM_MANAGER_LOG_WARN("桶体功能设置被拒绝: operation=%s reason=mcu-offline",
+                                operation);
+        return false;
+    }
+    if (last_link_status != LINK_STATUS_DETACHED)
+    {
+        SYSTEM_MANAGER_LOG_WARN("桶体功能设置被拒绝: operation=%s reason=detached-required",
+                                operation);
+        return false;
+    }
+    bucket_state = system_bucket_state_get();
+    if (bucket_state != SYSTEM_BUCKET_STATE_NORMAL)
+    {
+        SYSTEM_MANAGER_LOG_WARN("桶体功能设置被拒绝: operation=%s bucket=%s",
+                                operation,
+                                system_bucket_state_name(bucket_state));
+        return false;
+    }
+    if (g_base_flow != SYSTEM_BASE_FLOW_IDLE)
+    {
+        SYSTEM_MANAGER_LOG_WARN("桶体功能设置被拒绝: operation=%s base=%s",
+                                operation,
+                                system_base_flow_name(g_base_flow));
+        return false;
+    }
+    return true;
+}
+
+bool system_bucket_heat_set(bool enable)
+{
+    int16_t target;
+
+    if (!system_bucket_control_is_allowed(enable ? "heat" : "stop-heat"))
+    {
+        return false;
+    }
+
+    constant_temperature = enable;
+    if (enable)
+    {
+        target = g_bucket_temp_edit.editing ? g_bucket_temp_edit.target_temp :
+                 bucket_temp_base_value();
+        temp_set = bucket_temp_clamp(target);
+        serial_bucket_heat();
+    }
+    else
+    {
+        serial_bucket_stop_heat();
+    }
+    bucket_temp_clear_edit(guider_ui.working_label_temperature);
+    bucket_working_sync_function_icons(&guider_ui);
+    return true;
+}
+
+bool system_bucket_massage_set(int intensity)
+{
+    if (intensity < 0 || intensity > 3)
+    {
+        SYSTEM_MANAGER_LOG_WARN("按摩档位设置被拒绝: intensity=%d", intensity);
+        return false;
+    }
+    if (!system_bucket_control_is_allowed("massage"))
+    {
+        return false;
+    }
+
+    massage_intensity = intensity;
+    serial_bucket_massage();
+    bucket_working_sync_function_icons(&guider_ui);
+    return true;
+}
+
+bool system_bucket_uv_set(bool enable)
+{
+    if (!system_bucket_control_is_allowed("uv"))
+    {
+        return false;
+    }
+
+    sterilization = enable;
+    serial_bucket_uv();
+    bucket_working_sync_function_icons(&guider_ui);
+    return true;
 }
 
 static void bucket_working_clear_function_state(void)
@@ -1517,6 +1757,7 @@ static bool bucket_standby_create_overlay(void)
     return true;
 }
 
+// 取消倒计时，更新时间为0
 static void bucket_countdown_stop_for_standby(void)
 {
     bucket_auto_start_cancel();
@@ -1538,6 +1779,14 @@ static void bucket_countdown_stop_for_standby(void)
     bucket_countdown_update_label();
 }
 
+// 清理桶体运行时的状态，包括温度编辑、倒计时和功能状态
+static void bucket_runtime_cleanup(void)
+{
+    bucket_temp_clear_edit(guider_ui.working_label_temperature);
+    bucket_countdown_stop_for_standby();
+    bucket_working_clear_function_state();
+}
+
 static void bucket_standby_commit(void)
 {
     if (g_bucket_standby.submitted)
@@ -1547,11 +1796,8 @@ static void bucket_standby_commit(void)
     g_bucket_standby.submitted = true;
     g_bucket_standby.pressing = false;
 
-    bucket_temp_clear_edit(guider_ui.working_label_temperature);
-    bucket_countdown_stop_for_standby();
-    bucket_working_clear_function_state();
-    SYSTEM_MANAGER_LOG_USER("暂停键长按满3秒，下发 A7 并进入息屏待机");
-    serial_bucket_stop_all();
+    SYSTEM_MANAGER_LOG_USER("暂停键长按满3秒，进入息屏待机");
+    system_bucket_stop();
 
     if (g_bucket_standby.progress_arc != NULL)
     {
@@ -1567,7 +1813,7 @@ static void bucket_standby_commit(void)
 
     if (!backlight_control_sleep())
     {
-        SYSTEM_MANAGER_LOG_ERROR("关闭屏幕背光失败，A7和桶体状态清理已完成");
+        SYSTEM_MANAGER_LOG_ERROR("关闭屏幕背光失败，A1和桶体状态清理已完成");
         bucket_standby_finish_wake(false);
         return;
     }
@@ -1681,19 +1927,14 @@ static void bucket_standby_page_cleanup(void)
 
 static void bucket_countdown_expire(void)
 {
-    g_bucket_countdown.active = false;
-    remaining_seconds = 0u;
-    g_bucket_countdown.remaining_seconds = 0u;
-    bucket_countdown_update_label();
-
     if (g_bucket_countdown.expiry_handled)
     {
         return;
     }
     g_bucket_countdown.expiry_handled = true;
-    bucket_working_clear_function_state();
-    SYSTEM_MANAGER_LOG_USER("桶体定时到期，下发 A7 关闭所有器件");
-    serial_bucket_stop_all();
+    SYSTEM_MANAGER_LOG_USER("桶体定时到期，统一停止泡脚流程");
+    system_bucket_stop();
+    (void)voice_command_service_play_prompt(VOICE_PROMPT_FOOTBATH_FINISH);
 }
 
 static void bucket_countdown_refresh(void)
@@ -1759,6 +2000,18 @@ static void bucket_countdown_start(uint32_t seconds)
     }
 }
 
+static void bucket_countdown_cancel(void)
+{
+    bucket_countdown_cancel_edit();
+    remaining_seconds = 0u;
+    g_bucket_countdown.remaining_seconds = 0u;
+    g_bucket_countdown.deadline_ms = 0u;
+    g_bucket_countdown.active = false;
+    g_bucket_countdown.has_value = true;
+    g_bucket_countdown.expiry_handled = true;
+    bucket_countdown_update_label();
+}
+
 static void bucket_auto_start_delay_cb(lv_timer_t *timer)
 {
     LV_UNUSED(timer);
@@ -1771,8 +2024,7 @@ static void bucket_auto_start_delay_cb(lv_timer_t *timer)
         return;
     }
 
-    bucket_countdown_start(timer_set);
-    serial_bucket_timer();
+    system_bucket_timer_apply();
     SYSTEM_MANAGER_LOG_USER("离站后下发 A6 并启动倒计时: %us",
                             (unsigned int)timer_set);
 }
@@ -1786,7 +2038,30 @@ static void bucket_auto_start_cancel(void)
     }
 }
 
-static void bucket_auto_start_detached(void)
+/*
+ * 桶体定时的统一业务入口：A6 下发与屏幕倒计时保持为同一次操作。
+ * timer_set 为0时仍向 MCU 下发取消定时值，但本地只取消倒计时，
+ * 不进入自然到期处理，因此不会额外下发 A1或播放完成提示。
+ */
+void system_bucket_timer_apply(void)
+{
+    bucket_auto_start_cancel();
+    serial_bucket_timer();
+
+    if (timer_set == 0u)
+    {
+        bucket_countdown_cancel();
+        SYSTEM_MANAGER_LOG_USER("桶体定时已取消并下发 A6");
+        return;
+    }
+
+    bucket_countdown_cancel_edit();
+    bucket_countdown_start(timer_set);
+    SYSTEM_MANAGER_LOG_USER("桶体定时已下发 A6并重启倒计时: %us",
+                            (unsigned int)timer_set);
+}
+
+static void bucket_start_after_auto_water_navigation(void)
 {
     bucket_auto_start_cancel();
     bucket_countdown_cancel_edit();
@@ -1800,7 +2075,7 @@ static void bucket_auto_start_detached(void)
 
     constant_temperature = true;
     serial_bucket_heat();
-    SYSTEM_MANAGER_LOG_USER("离站立即下发 A2: target_temp=%d", temp_set);
+    SYSTEM_MANAGER_LOG_USER("自动上水导航完成后下发 A2: target_temp=%d", temp_set);
 
     g_bucket_countdown.delayed_start_timer = lv_timer_create(bucket_auto_start_delay_cb,
             BUCKET_AUTO_TIMER_DELAY_MS,
@@ -1811,8 +2086,42 @@ static void bucket_auto_start_detached(void)
     }
     else
     {
-        SYSTEM_MANAGER_LOG_ERROR("创建离站延时 A6 timer 失败");
+        SYSTEM_MANAGER_LOG_ERROR("创建自动上水导航完成后延时 A6 timer 失败");
     }
+}
+
+static bool auto_water_navigation_try_start_bucket(void)
+{
+    int16_t target_temperature;
+    uint32_t target_time_sec;
+
+    if (!g_auto_water_navigation.active ||
+            !g_auto_water_navigation.completion_handled ||
+            !g_auto_water_navigation.navigation_arrived ||
+            last_link_status != LINK_STATUS_DETACHED)
+    {
+        return false;
+    }
+
+    target_temperature = g_auto_water_navigation.target_temperature;
+    target_time_sec = g_auto_water_navigation.target_time_sec;
+    temp_set = target_temperature;
+    timer_set = target_time_sec;
+    if (!navigate_to_screen(UI_SCREEN_WORKING))
+    {
+        SYSTEM_MANAGER_LOG_ERROR("自动上水导航完成但工作页切换失败，暂不启动泡脚");
+        return false;
+    }
+    system_auto_water_navigation_cancel();
+    system_base_flow_finish(SYSTEM_BASE_FLOW_MOVING,
+                            "auto-water-navigation-arrived");
+    current_location = going_to_location;
+    to_preparing_flat = 0;
+    bucket_start_after_auto_water_navigation();
+    SYSTEM_MANAGER_LOG_USER(
+        "自动上水导航到达且已离站，切换工作页并启动泡脚: temp=%d time=%us",
+        temp_set, (unsigned int)timer_set);
+    return true;
 }
 
 static void bucket_timer_step(lv_ui *ui)
@@ -1823,6 +2132,10 @@ static void bucket_timer_step(lv_ui *ui)
     };
 
     if (ui == NULL || ui->working_label_time_left == NULL)
+    {
+        return;
+    }
+    if (system_mcu_link_state_get() != SYSTEM_MCU_LINK_ONLINE)
     {
         return;
     }
@@ -1845,8 +2158,7 @@ static void bucket_timer_step(lv_ui *ui)
     g_bucket_countdown.editing = true;
     bucket_countdown_update_label();
     bucket_countdown_reset_confirm_timer();
-    serial_bucket_timer();
-    SYSTEM_MANAGER_LOG_USER("桶体定时按钮下发 A6，等待确认: %us",
+    SYSTEM_MANAGER_LOG_USER("桶体定时按钮更新候选值，等待确认: %us",
                             (unsigned int)timer_set);
 }
 
@@ -1881,84 +2193,6 @@ static void conf_mode_detail_screen_lifecycle_cb(lv_event_t *e)
     }
 }
 
-static void init_default_locations(void)
-{
-    memset(g_location_settings, 0, sizeof(g_location_settings));
-
-    snprintf(g_location_settings[0].name, sizeof(g_location_settings[0].name), "客厅");
-    g_location_settings[0].index = 1;
-    g_location_settings[0].default_mode_index = 0;
-    g_location_settings[0].coord.x = 60;
-    g_location_settings[0].coord.y = 40;
-
-    snprintf(g_location_settings[1].name, sizeof(g_location_settings[1].name), "卧室");
-    g_location_settings[1].index = 2;
-    g_location_settings[1].default_mode_index = 1;
-    g_location_settings[1].coord.x = 280;
-    g_location_settings[1].coord.y = 40;
-
-    snprintf(g_location_settings[2].name, sizeof(g_location_settings[2].name), "书房");
-    g_location_settings[2].index = 3;
-    g_location_settings[2].default_mode_index = 2;
-    g_location_settings[2].coord.x = 60;
-    g_location_settings[2].coord.y = 260;
-
-    snprintf(g_location_settings[3].name, sizeof(g_location_settings[3].name), "阳台");
-    g_location_settings[3].index = 4;
-    g_location_settings[3].default_mode_index = 0;
-    g_location_settings[3].coord.x = 280;
-    g_location_settings[3].coord.y = 260;
-
-    g_location_count = 4;
-}
-
-void working_bind_play_pause_buttons(lv_obj_t *pause_btn, lv_obj_t *play_btn)
-{
-    g_working_pause_btn = pause_btn;
-    g_working_play_btn = play_btn;
-}
-
-static lv_obj_t *working_create_power_button(lv_obj_t *parent,
-        lv_coord_t x,
-        lv_coord_t y,
-        lv_coord_t w,
-        lv_coord_t h)
-{
-    lv_obj_t *button;
-    lv_obj_t *symbol;
-
-    if (parent == NULL)
-    {
-        return NULL;
-    }
-
-    button = lv_obj_create(parent);
-    lv_obj_set_pos(button, x, y);
-    lv_obj_set_size(button, w, h);
-    lv_obj_remove_flag(button, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(button, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_style_bg_color(button, lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_bg_opa(button, LV_OPA_30, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_radius(button, 20, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_border_width(button, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_shadow_width(button, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_shadow_ofs_x(button, 3, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_shadow_ofs_y(button, 3, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_shadow_color(button, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_shadow_opa(button, LV_OPA_40, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_bg_color(button, lv_color_hex(0xe0e0e0), LV_PART_MAIN | LV_STATE_PRESSED);
-
-    symbol = lv_label_create(button);
-    lv_label_set_text(symbol, LV_SYMBOL_POWER);
-    lv_obj_set_style_text_font(symbol, &lv_font_montserratMedium_80,
-                               LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_color(symbol, lv_color_hex(0xffffff),
-                                LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_opa(symbol, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_center(symbol);
-
-    return button;
-}
 
 static int get_mode_index_from_ptr(const system_mode_t *mode)
 {
@@ -1994,7 +2228,7 @@ static void update_mode_from_detail_ui(system_mode_t *mode)
     medicinal_sel = (uint16_t)lv_dropdown_get_selected(guider_ui.conf_mode_detail_combo_medicinal);
     mode->use_drug1 = ((medicinal_sel & 1) == 1);
     mode->use_drug2 = ((medicinal_sel & 2) == 2);
-    mode->position = (int)lv_dropdown_get_selected(guider_ui.conf_mode_detail_combo_location);
+    snprintf(mode->station_name, sizeof(mode->station_name), "%s", g_mode_edit_station_name);
 }
 
 static void apply_dropdown_list_font(lv_obj_t *dropdown)
@@ -2052,30 +2286,6 @@ static void build_mode_dropdown_options(char *options, size_t options_size)
     }
 }
 
-static void conf_location_name_changed(lv_event_t *e)
-{
-    system_location_t *location;
-    const char *name;
-
-    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED)
-    {
-        return;
-    }
-
-    location = (system_location_t *)lv_event_get_user_data(e);
-    if (location == NULL)
-    {
-        return;
-    }
-
-    name = lv_textarea_get_text(lv_event_get_target(e));
-    if (name == NULL)
-    {
-        return;
-    }
-
-    snprintf(location->name, sizeof(location->name), "%s", name);
-}
 
 static void conf_location_default_mode_changed(lv_event_t *e)
 {
@@ -2369,7 +2579,7 @@ static void add_mode_btn_clicked(lv_event_t *e)
         mode.time_sec = timer_set > 0 ? timer_set : 600;
         mode.water_level = (uint8_t)water_level;
         mode.temperature = temp_set;
-        mode.position = 0;
+        mode.station_name[0] = '\0';
 
         g_mode_settings[index] = mode;
         g_mode_count++;
@@ -2424,35 +2634,32 @@ static int ensure_location_settings_dir(void)
 static int persist_mode_settings(void)
 {
     FILE *fp;
-    system_mode_store_t store;
+    system_mode_store_t store = {0};
 
-    memset(&store, 0, sizeof(store));
     store.magic = MODE_SETTINGS_MAGIC;
     store.version = MODE_SETTINGS_VERSION;
     store.count = (uint32_t)g_mode_count;
-    if (g_mode_count > 0)
-    {
-        memcpy(store.modes, g_mode_settings, g_mode_count * sizeof(system_mode_t));
-    }
-
+    memcpy(store.modes, g_mode_settings, g_mode_count * sizeof(system_mode_t));
     if (ensure_mode_settings_dir() != 0)
     {
         return -1;
     }
-
-    fp = fopen(MODE_SETTINGS_PATH, "wb");
+    fp = fopen(MODE_SETTINGS_TMP_PATH, "wb");
     if (fp == NULL)
     {
         return -1;
     }
-
-    if (fwrite(&store, sizeof(store), 1, fp) != 1)
+    if (fwrite(&store, sizeof(store), 1, fp) != 1 || fflush(fp) != 0 ||
+            fsync(fileno(fp)) != 0)
     {
         fclose(fp);
         return -1;
     }
-
-    return fclose(fp) == 0 ? 0 : -1;
+    if (fclose(fp) != 0)
+    {
+        return -1;
+    }
+    return rename(MODE_SETTINGS_TMP_PATH, MODE_SETTINGS_PATH);
 }
 
 static int persist_location_settings(void)
@@ -2500,7 +2707,7 @@ static void init_default_modes(void)
     g_mode_settings[0].temperature = 37;
     g_mode_settings[0].use_drug1 = true;
     g_mode_settings[0].use_drug2 = false;
-    g_mode_settings[0].position = 1;
+    g_mode_settings[0].station_name[0] = '\0';
 
     snprintf(g_mode_settings[1].name, sizeof(g_mode_settings[1].name), "放松");
     g_mode_settings[1].icon_id = 3;
@@ -2509,7 +2716,7 @@ static void init_default_modes(void)
     g_mode_settings[1].temperature = 39;
     g_mode_settings[1].use_drug1 = false;
     g_mode_settings[1].use_drug2 = true;
-    g_mode_settings[1].position = 2;
+    g_mode_settings[1].station_name[0] = '\0';
 
     snprintf(g_mode_settings[2].name, sizeof(g_mode_settings[2].name), "驱寒");
     g_mode_settings[2].icon_id = 11;
@@ -2518,79 +2725,397 @@ static void init_default_modes(void)
     g_mode_settings[2].temperature = 41;
     g_mode_settings[2].use_drug1 = true;
     g_mode_settings[2].use_drug2 = true;
-    g_mode_settings[2].position = 3;
+    g_mode_settings[2].station_name[0] = '\0';
 
     g_mode_count = 3;
 }
 
 static int load_mode_settings(void)
 {
-    FILE *fp;
-    system_mode_store_t store;
+    FILE *fp = fopen(MODE_SETTINGS_PATH, "rb");
+    uint32_t header[3];
+    system_mode_v2_t old_modes[SYSTEM_MODE_MAX_COUNT];
+    bool migrated = false;
+    bool valid = false;
 
-    fp = fopen(MODE_SETTINGS_PATH, "rb");
     if (fp == NULL)
     {
         init_default_modes();
         return persist_mode_settings();
     }
-
-    if (fread(&store, sizeof(store), 1, fp) != 1)
+    if (fread(header, sizeof(header), 1, fp) == 1 &&
+            header[0] == MODE_SETTINGS_MAGIC && header[2] > 0 &&
+            header[2] <= SYSTEM_MODE_MAX_COUNT)
     {
-        fclose(fp);
-        init_default_modes();
-        return persist_mode_settings();
+        if (header[1] == MODE_SETTINGS_VERSION)
+        {
+            valid = fread(g_mode_settings, sizeof(g_mode_settings), 1, fp) == 1;
+        }
+        else if (header[1] == 2u && fread(old_modes, sizeof(old_modes), 1, fp) == 1)
+        {
+            memset(g_mode_settings, 0, sizeof(g_mode_settings));
+            for (size_t index = 0; index < header[2]; ++index)
+            {
+                system_mode_t *mode = &g_mode_settings[index];
+                const system_mode_v2_t *old = &old_modes[index];
+                memcpy(mode->name, old->name, sizeof(mode->name));
+                mode->icon_id = old->icon_id;
+                mode->time_sec = old->time_sec;
+                mode->water_level = old->water_level;
+                mode->temperature = old->temperature;
+                mode->use_drug1 = old->use_drug1;
+                mode->use_drug2 = old->use_drug2;
+            }
+            migrated = true;
+            valid = true;
+        }
     }
-
     fclose(fp);
-
-    if (store.magic != MODE_SETTINGS_MAGIC ||
-            store.version != MODE_SETTINGS_VERSION ||
-            store.count == 0 ||
-            store.count > SYSTEM_MODE_MAX_COUNT)
+    if (!valid)
     {
         init_default_modes();
         return persist_mode_settings();
     }
-
-    memcpy(g_mode_settings, store.modes, store.count * sizeof(system_mode_t));
-    g_mode_count = store.count;
+    g_mode_count = header[2];
+    for (size_t index = 0; index < g_mode_count; ++index)
+    {
+        system_mode_t *mode = &g_mode_settings[index];
+        mode->name[sizeof(mode->name) - 1u] = '\0';
+        if (memchr(mode->station_name, '\0', sizeof(mode->station_name)) == NULL ||
+                strpbrk(mode->station_name, "\r\n") != NULL)
+        {
+            mode->station_name[0] = '\0';
+            SYSTEM_MANAGER_LOG_WARN("模式站点名称无效，清空绑定: %u", (unsigned int)index);
+        }
+    }
+    if (migrated)
+    {
+        SYSTEM_MANAGER_LOG_USER("模式配置已从版本2迁移，原序号绑定清空");
+        if (persist_mode_settings() != 0)
+        {
+            SYSTEM_MANAGER_LOG_WARN("模式迁移落盘失败，保留内存参数");
+        }
+    }
     return 0;
 }
 
-static int load_location_settings(void)
-{
-    FILE *fp;
-    system_location_store_t store;
 
-    fp = fopen(LOCATION_SETTINGS_PATH, "rb");
+static bool system_location_is_selectable_station(const StationInfo_t *station)
+{
+    if (station == NULL)
+    {
+        return false;
+    }
+
+    if (station->is_enable == 0)
+    {
+        return false;
+    }
+
+    if (station->type == 2 || station->id == 0)
+    {
+        return false;
+    }
+
+    return station->name[0] != '\0';
+}
+
+static int system_location_find_by_station_id(const system_location_t *locations,
+        size_t count,
+        int station_id)
+{
+    size_t index;
+
+    if (locations == NULL)
+    {
+        return -1;
+    }
+
+    for (index = 0; index < count; ++index)
+    {
+        if (locations[index].index == station_id)
+        {
+            return (int)index;
+        }
+    }
+
+    return -1;
+}
+
+static int system_location_find_by_name(const system_location_t *locations,
+                                        size_t count,
+                                        const char *name)
+{
+    size_t index;
+
+    if (locations == NULL || name == NULL || name[0] == '\0')
+    {
+        return -1;
+    }
+
+    for (index = 0; index < count; ++index)
+    {
+        if (strcmp(locations[index].name, name) == 0)
+        {
+            return (int)index;
+        }
+    }
+
+    return -1;
+}
+
+static void system_location_update_entry_from_station(system_location_t *location,
+        const StationInfo_t *station)
+{
+    if (location == NULL || station == NULL)
+    {
+        return;
+    }
+
+    snprintf(location->name, sizeof(location->name), "%s", station->name);
+    location->index = station->id;
+    location->coord.x = (lv_coord_t)lroundf(station->x);
+    location->coord.y = (lv_coord_t)lroundf(station->y);
+}
+
+static int system_location_resolve_station(const char *target_name,
+        int target_location_index,
+        StationInfo_t *station)
+{
+    MapStations_t list = {0};
+    int matches = 0;
+    bool has_name = target_name != NULL && target_name[0] != '\0';
+
+    if (station == NULL || RobotTcp_GetStationList(&list) != 0)
+    {
+        return -1;
+    }
+    memset(station, 0, sizeof(*station));
+    for (int index = 0; index < list.station_count; ++index)
+    {
+        const StationInfo_t *candidate = &list.stations[index];
+        if (!system_location_is_selectable_station(candidate))
+        {
+            continue;
+        }
+        if ((has_name && strcmp(candidate->name, target_name) == 0) ||
+                (!has_name && target_location_index >= 0 && candidate->id == target_location_index))
+        {
+            *station = *candidate;
+            ++matches;
+        }
+    }
+    RobotTcp_FreeStationList(&list);
+    if (matches != 1)
+    {
+        memset(station, 0, sizeof(*station));
+        return -1;
+    }
+    return 0;
+}
+
+static void restore_location_preferences(void)
+{
+    FILE *fp = fopen(LOCATION_SETTINGS_PATH, "rb");
+    uint32_t header[3];
+    system_location_t saved[SYSTEM_LOCATION_MAX_COUNT] = {0};
+    system_location_v1_t old[SYSTEM_LOCATION_MAX_COUNT];
+    bool valid = false;
+
     if (fp == NULL)
     {
-        init_default_locations();
-        return persist_location_settings();
+        return;
     }
-
-    if (fread(&store, sizeof(store), 1, fp) != 1)
+    if (fread(header, sizeof(header), 1, fp) == 1 &&
+            header[0] == LOCATION_SETTINGS_MAGIC && header[2] <= SYSTEM_LOCATION_MAX_COUNT)
     {
-        fclose(fp);
-        init_default_locations();
-        return persist_location_settings();
+        if (header[1] == LOCATION_SETTINGS_VERSION)
+        {
+            valid = fread(saved, sizeof(saved), 1, fp) == 1;
+        }
+        else if (header[1] == 1u && fread(old, sizeof(old), 1, fp) == 1)
+        {
+            for (size_t i = 0; i < header[2]; ++i)
+            {
+                old[i].name[sizeof(old[i].name) - 1u] = '\0';
+                snprintf(saved[i].name, sizeof(saved[i].name), "%s", old[i].name);
+                saved[i].default_mode_index = old[i].default_mode_index;
+            }
+            valid = true;
+        }
     }
-
     fclose(fp);
-
-    if (store.magic != LOCATION_SETTINGS_MAGIC ||
-            store.version != LOCATION_SETTINGS_VERSION ||
-            store.count == 0 ||
-            store.count > SYSTEM_LOCATION_MAX_COUNT)
+    if (!valid)
     {
-        init_default_locations();
-        return persist_location_settings();
+        return;
+    }
+    for (size_t i = 0; i < g_location_count; ++i)
+    {
+        for (size_t j = 0; j < header[2]; ++j)
+        {
+            if (memchr(saved[j].name, '\0', sizeof(saved[j].name)) != NULL &&
+                    strcmp(g_location_settings[i].name, saved[j].name) == 0 &&
+                    saved[j].default_mode_index >= 0 &&
+                    (size_t)saved[j].default_mode_index < g_mode_count)
+            {
+                g_location_settings[i].default_mode_index = saved[j].default_mode_index;
+                break;
+            }
+        }
+    }
+}
+
+static void mode_station_changed(lv_event_t *e)
+{
+    uint32_t selected = lv_dropdown_get_selected(lv_event_get_target(e));
+    if (selected == 0u)
+    {
+        g_mode_edit_station_name[0] = '\0';
+    }
+    else if (selected <= g_location_count)
+    {
+        snprintf(g_mode_edit_station_name, sizeof(g_mode_edit_station_name), "%s",
+                 g_location_settings[selected - 1u].name);
+    }
+}
+
+static void mode_station_dropdown_refresh(lv_ui *ui)
+{
+    lv_obj_t *dropdown = ui->conf_mode_detail_combo_location;
+    char options[(SYSTEM_LOCATION_MAX_COUNT + 2) * (SYSTEM_LOCATION_NAME_LEN + 1)];
+    size_t used;
+    uint32_t selected = 0;
+    int index;
+
+    if (dropdown == NULL || !lv_obj_is_valid(dropdown))
+    {
+        return;
+    }
+    lv_dropdown_close(dropdown);
+    if (g_location_count == 0u)
+    {
+        lv_dropdown_set_options(dropdown, "暂无站点");
+        lv_obj_add_state(dropdown, LV_STATE_DISABLED);
+        mode_station_dialog_refresh(ui);
+        return;
+    }
+    lv_obj_remove_state(dropdown, LV_STATE_DISABLED);
+    used = (size_t)snprintf(options, sizeof(options), "未绑定");
+    for (size_t i = 0; i < g_location_count; ++i)
+    {
+        used += (size_t)snprintf(options + used, sizeof(options) - used, "\n%s",
+                                 g_location_settings[i].name);
+    }
+    index = system_location_find_by_name(g_location_settings, g_location_count,
+                                         g_mode_edit_station_name);
+    if (index >= 0)
+    {
+        selected = (uint32_t)index + 1u;
+    }
+    else if (g_mode_edit_station_name[0] != '\0')
+    {
+        /* 失效名称保留在编辑缓存，不让刷新悄悄替用户清空绑定。 */
+        snprintf(options + used, sizeof(options) - used, "\n原绑定站点已失效");
+        selected = (uint32_t)g_location_count + 1u;
+    }
+    lv_dropdown_set_options(dropdown, options);
+    lv_dropdown_set_selected(dropdown, selected);
+    apply_dropdown_list_font(dropdown);
+    mode_station_dialog_refresh(ui);
+}
+
+static void system_location_refresh_pages(lv_ui *ui)
+{
+    if (ui == NULL)
+    {
+        return;
     }
 
-    memcpy(g_location_settings, store.locations, store.count * sizeof(system_location_t));
-    g_location_count = store.count;
-    return 0;
+    if (ui->location_cont_2 != NULL && lv_obj_is_valid(ui->location_cont_2))
+    {
+        location_page_init(ui);
+    }
+    if (ui->conf_location_cont_2 != NULL && lv_obj_is_valid(ui->conf_location_cont_2))
+    {
+        conf_location_init(ui);
+    }
+}
+
+void system_location_sync_from_robot_cache(void)
+{
+    if (lv_async_call(system_location_sync_from_robot_cache_async, NULL) != LV_RESULT_OK)
+    {
+        SYSTEM_MANAGER_LOG_ERROR("站点同步调度失败");
+    }
+}
+
+static void system_location_sync_from_robot_cache_async(void *user_data)
+{
+    MapStations_t station_list = {0};
+    system_location_t old_locations[SYSTEM_LOCATION_MAX_COUNT];
+    char selected_name[SYSTEM_LOCATION_NAME_LEN] = {0};
+    size_t old_count = g_location_count;
+    size_t count = 0;
+
+    LV_UNUSED(user_data);
+    if (RobotTcp_GetStationList(&station_list) != 0)
+    {
+        SYSTEM_MANAGER_LOG_ERROR("读取站点缓存失败");
+        return;
+    }
+    memcpy(old_locations, g_location_settings, sizeof(old_locations));
+    if (current_selected_location_index >= 0 &&
+            (size_t)current_selected_location_index < old_count)
+    {
+        snprintf(selected_name, sizeof(selected_name), "%s",
+                 old_locations[current_selected_location_index].name);
+    }
+    memset(g_location_settings, 0, sizeof(g_location_settings));
+    for (int index = 0; index < station_list.station_count; ++index)
+    {
+        const StationInfo_t *station = &station_list.stations[index];
+        bool ambiguous = false;
+        if (!system_location_is_selectable_station(station))
+        {
+            continue;
+        }
+        for (int other = 0; other < station_list.station_count; ++other)
+        {
+            if (other != index && system_location_is_selectable_station(&station_list.stations[other]) &&
+                    strcmp(station->name, station_list.stations[other].name) == 0)
+            {
+                ambiguous = true;
+                break;
+            }
+        }
+        if (ambiguous)
+        {
+            SYSTEM_MANAGER_LOG_WARN("同名站点无法唯一确定，跳过: %s", station->name);
+            continue;
+        }
+        if (count == SYSTEM_LOCATION_MAX_COUNT)
+        {
+            SYSTEM_MANAGER_LOG_WARN("站点数量超过页面容量: %u", SYSTEM_LOCATION_MAX_COUNT);
+            break;
+        }
+        system_location_update_entry_from_station(&g_location_settings[count], station);
+        int old_index = system_location_find_by_name(old_locations, old_count, station->name);
+        g_location_settings[count].default_mode_index =
+            old_index >= 0 ? old_locations[old_index].default_mode_index : 0;
+        ++count;
+    }
+    RobotTcp_FreeStationList(&station_list);
+    g_location_count = count;
+    if (old_count == 0u)
+    {
+        restore_location_preferences();
+    }
+    current_selected_location_index =
+        system_location_find_by_name(g_location_settings, count, selected_name);
+    /* 列表变化不修改模式绑定，也不重载正在编辑的表单。 */
+    system_location_refresh_pages(&guider_ui);
+    mode_station_dropdown_refresh(&guider_ui);
+    SYSTEM_MANAGER_LOG_USER("站点列表已同步: 数量=%u", (unsigned int)count);
 }
 
 void location_grid_btn_clicked(lv_event_t *e)
@@ -2636,93 +3161,215 @@ int system_start_selected_location_navigation(lv_obj_t *dialog_parent)
     }
     location = &g_location_settings[current_selected_location_index];
     return system_start_navigation(dialog_parent, location->name,
-                                   location->index);
+                                   location->index, NULL);
 }
 
+int system_start_return_base(void)
+{
+    if (g_return_base_pending && to_preparing_flat == 4)
+    {
+        return 0;
+    }
+    if (system_base_flow_request_start(SYSTEM_BASE_FLOW_MOVING,
+                                       SYSTEM_ACTION_SOURCE_UI).result != SYSTEM_COMMAND_ACCEPTED)
+    {
+        return -1;
+    }
+    system_auto_water_navigation_cancel();
+    to_preparing_flat = 4;
+    if (lv_screen_active() == guider_ui.preparing)
+    {
+        preparing_page_init(&guider_ui);
+    }
+    else if (!navigate_to_screen(UI_SCREEN_PREPARING))
+    {
+        system_base_flow_finish(SYSTEM_BASE_FLOW_MOVING, "return-base-page-failed");
+        to_preparing_flat = 0;
+        return -1;
+    }
+    return 0;
+}
+
+// 自动上水开始时复制目标，列表更新只影响下一轮。
 void system_auto_water_navigation_arm(void)
 {
-    const char *target_name = NULL;
+    StationInfo_t target = {0};
+    const char *name = "";
+    bool valid = false;
 
-    g_auto_water_target_location_index = -1;
     if (current_selected_mode_index >= 0 &&
             current_selected_mode_index < (int)g_mode_count)
     {
-        const system_mode_t *mode =
-            &g_mode_settings[current_selected_mode_index];
-        if (mode->position >= 0 && mode->position < (int)g_location_count &&
-                g_location_settings[mode->position].name[0] != '\0')
-        {
-            target_name = g_location_settings[mode->position].name;
-            g_auto_water_target_location_index =
-                g_location_settings[mode->position].index;
-        }
+        name = g_mode_settings[current_selected_mode_index].station_name;
+        valid = system_location_resolve_station(name, -1, &target) == 0;
     }
-    auto_water_navigation_flow_arm(
-        &g_auto_water_navigation,
-        target_name,
-        serial_mcu_status_report_sequence());
-    SYSTEM_MANAGER_LOG_USER("自动注水导航已武装: mode=%d target=%s",
-                            current_selected_mode_index,
-                            target_name == NULL ? "<invalid>" : target_name);
+    auto_water_navigation_flow_arm(&g_auto_water_navigation, valid ? &target : NULL,
+                                   serial_mcu_status_report_sequence());
+    SYSTEM_MANAGER_LOG_USER("自动上水目标快照: 模式=%d 名称=%s 有效=%d",
+                            current_selected_mode_index, name, valid);
 }
 
 void system_auto_water_navigation_cancel(void)
 {
     auto_water_navigation_flow_cancel(&g_auto_water_navigation);
-    g_auto_water_target_location_index = -1;
 }
 
-void system_self_clean_stop_confirmed(void)
+// 整合的停止泡脚接口
+void system_bucket_stop(void)
+{
+    bucket_runtime_cleanup();
+    SYSTEM_MANAGER_LOG_USER("泡脚流程已停止，下发 A1");
+    serial_bucket_standby();
+}
+
+// 整合的停止自动上水接口
+void system_auto_water_stop(void)
+{
+    if (g_base_flow != SYSTEM_BASE_FLOW_WATERING)
+    {
+        SYSTEM_MANAGER_LOG_WARN("忽略非自动上水停止请求: active=%s",
+                                system_base_flow_name(g_base_flow));
+        return;
+    }
+
+    serial_base_standby();
+    auto_water_page_cleanup();
+    system_base_flow_finish(SYSTEM_BASE_FLOW_WATERING,
+                            "water-stop");
+    preparing_common_cleanup();
+    to_preparing_flat = 0;
+    (void)navigate_to_screen(UI_SCREEN_INDEX);
+}
+
+void system_self_clean_stop(void)
 {
     if (g_base_flow != SYSTEM_BASE_FLOW_SELF_CLEANING)
     {
-        SYSTEM_MANAGER_LOG_USER("自清洁流程已不在运行状态, 无需停止");
+        SYSTEM_MANAGER_LOG_WARN("忽略非自清洁停止请求: active=%s",
+                                system_base_flow_name(g_base_flow));
         return;
     }
+
     serial_base_standby();
-    system_base_flow_finish(SYSTEM_BASE_FLOW_SELF_CLEANING, "self-clean-ui-stop");
-    is_self_cleaning = false;
-}
-
-static bool system_voice_stop_runtime(void)
-{
-    bool was_self_cleaning = to_preparing_flat == 2 ||
-                             is_self_cleaning || g_self_clean_flow.active;
-
-    bucket_auto_start_cancel();
-    bucket_temp_clear_edit(NULL);
-    bucket_countdown_stop_for_standby();
-    bucket_working_clear_function_state();
-    system_auto_water_navigation_cancel();
-    self_clean_flow_stop(&g_self_clean_flow);
-    is_self_cleaning = false;
-    if (was_self_cleaning)
-    {
-        preparing_page_cleanup();
-        /* 阻止已经排队的准备页加载回调再次启动自清洁并下发 B3。 */
-        to_preparing_flat = 0;
-    }
-    if (g_base_flow != SYSTEM_BASE_FLOW_IDLE &&
-            g_base_flow != SYSTEM_BASE_FLOW_MOVING)
-    {
-        SYSTEM_MANAGER_LOG_USER("全局停止释放基站流程: active=%s",
-                                system_base_flow_name(g_base_flow));
-        g_base_flow = SYSTEM_BASE_FLOW_IDLE;
-        g_drying_active_reported = false;
-    }
-
-    return was_self_cleaning;
-}
-
-static void system_voice_stop_self_clean(void)
-{
-    preparing_page_cleanup();
-    self_clean_flow_stop(&g_self_clean_flow);
-    self_clean_finish_cleanup();
+    self_clean_page_cleanup();
+    preparing_common_cleanup();
     is_self_cleaning = false;
     to_preparing_flat = 0;
     system_base_flow_finish(SYSTEM_BASE_FLOW_SELF_CLEANING,
-                            "voice-clean-stop");
+                            "self-clean-stop");
+    (void)navigate_to_screen(UI_SCREEN_INDEX);
+}
+
+// 整合的停止所有活动流程接口
+void system_active_flow_stop(void)
+{
+    if (g_base_flow == SYSTEM_BASE_FLOW_MOVING)
+    {
+        system_auto_water_navigation_cancel();
+        if (last_link_status == LINK_STATUS_DETACHED)
+        {
+            serial_bucket_standby();
+        }
+        else if (last_link_status == LINK_STATUS_DOCKED)
+        {
+            serial_base_standby();
+        }
+        else
+        {
+            SYSTEM_MANAGER_LOG_WARN("移动期间未知LINK_STATUS: 0x%02X",
+                                    (unsigned int)last_link_status);
+        }
+        return;
+    }
+
+    if (last_link_status == LINK_STATUS_DETACHED)
+    {
+        system_bucket_stop();
+        return;
+    }
+    if (last_link_status != LINK_STATUS_DOCKED)
+    {
+        SYSTEM_MANAGER_LOG_WARN("未知LINK_STATUS，不下发待机命令: 0x%02X",
+                                (unsigned int)last_link_status);
+        return;
+    }
+
+    switch (g_base_flow)
+    {
+    case SYSTEM_BASE_FLOW_WATERING:
+        system_auto_water_stop();
+        break;
+    case SYSTEM_BASE_FLOW_SELF_CLEANING:
+        system_self_clean_stop();
+        break;
+    case SYSTEM_BASE_FLOW_IDLE:
+        serial_base_standby();
+        (void)navigate_to_screen(UI_SCREEN_INDEX);
+        break;
+    case SYSTEM_BASE_FLOW_MOVING:
+    default:
+        break;
+    }
+}
+
+static void system_base_runtime_cleanup_without_command(const char *source)
+{
+    system_base_flow_t active_flow = g_base_flow;
+    bool has_auto_water_runtime;
+    bool has_self_clean_runtime;
+
+    if (active_flow == SYSTEM_BASE_FLOW_MOVING)
+    {
+        system_auto_water_navigation_cancel();
+        return;
+    }
+
+    has_auto_water_runtime = active_flow == SYSTEM_BASE_FLOW_WATERING ||
+                             to_preparing_flat == 1;
+    has_self_clean_runtime = active_flow == SYSTEM_BASE_FLOW_SELF_CLEANING ||
+                             to_preparing_flat == 2 ||
+                             is_self_cleaning ||
+                             g_self_clean_flow.active;
+
+    if (has_auto_water_runtime)
+    {
+        auto_water_page_cleanup();
+    }
+    if (has_self_clean_runtime)
+    {
+        self_clean_page_cleanup();
+    }
+    if (has_auto_water_runtime || has_self_clean_runtime)
+    {
+        preparing_common_cleanup();
+    }
+    is_self_cleaning = false;
+    to_preparing_flat = 0;
+    if (active_flow != SYSTEM_BASE_FLOW_IDLE)
+    {
+        system_base_flow_finish(active_flow, source);
+    }
+}
+
+static void system_global_stop(void)
+{
+    if (system_mcu_link_state_get() == SYSTEM_MCU_LINK_UNKNOWN)
+    {
+        bucket_runtime_cleanup();
+        system_base_runtime_cleanup_without_command("global-stop-no-position");
+        SYSTEM_MANAGER_LOG_WARN("全局停止已清理本地状态，无有效MCU位置，不下发待机命令");
+        return;
+    }
+
+    if (last_link_status == LINK_STATUS_DETACHED &&
+            g_base_flow != SYSTEM_BASE_FLOW_MOVING)
+    {
+        system_bucket_stop();
+        return;
+    }
+
+    bucket_runtime_cleanup();
+    system_active_flow_stop();
 }
 
 static void system_voice_massage_start(void)
@@ -2762,7 +3409,7 @@ static system_command_decision_t system_voice_decision(
 
 static bool system_voice_is_detached_command(voice_command_t command)
 {
-    return command == VOICE_COMMAND_FOOTBATH_START ||
+    return command == VOICE_COMMAND_FOOTBATH_CONTINUE ||
            command == VOICE_COMMAND_FOOTBATH_STOP ||
            command == VOICE_COMMAND_MASSAGE_START ||
            command == VOICE_COMMAND_MASSAGE_STOP ||
@@ -2772,17 +3419,8 @@ static bool system_voice_is_detached_command(voice_command_t command)
 
 static bool system_voice_is_docked_command(voice_command_t command)
 {
-    return command == VOICE_COMMAND_DRY_START ||
-           command == VOICE_COMMAND_DRY_STOP ||
+    return command == VOICE_COMMAND_FOOTBATH_START ||
            command == VOICE_COMMAND_CLEAN_START ||
-           command == VOICE_COMMAND_CLEAN_STOP;
-}
-
-static bool system_voice_is_stop_command(voice_command_t command)
-{
-    return command == VOICE_COMMAND_FOOTBATH_STOP ||
-           command == VOICE_COMMAND_MASSAGE_STOP ||
-           command == VOICE_COMMAND_DRY_STOP ||
            command == VOICE_COMMAND_CLEAN_STOP;
 }
 
@@ -2792,40 +3430,31 @@ system_command_decision_t system_voice_command_execute(voice_command_t command)
 
     if (command == VOICE_COMMAND_STOP_ALL)
     {
-        bool was_self_cleaning = system_voice_stop_runtime();
-
-        serial_base_standby();
-        if (was_self_cleaning)
-        {
-            (void)navigate_to_screen(UI_SCREEN_INDEX);
-        }
+        system_global_stop();
         return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
                                      "GLOBAL", "ANY", "accepted");
     }
-    if (!has_mcu_status_report && !system_voice_is_stop_command(command))
+    if (system_mcu_link_state_get() != SYSTEM_MCU_LINK_ONLINE)
     {
         return system_voice_decision(SYSTEM_COMMAND_STATE_REJECTED,
                                      "POSITION", "UNKNOWN",
                                      "no-valid-mcu-status");
     }
-    if (!system_voice_is_stop_command(command) &&
-            system_voice_is_detached_command(command) &&
+    if (system_voice_is_detached_command(command) &&
             last_link_status != LINK_STATUS_DETACHED)
     {
         return system_voice_decision(SYSTEM_COMMAND_STATE_REJECTED,
                                      "POSITION", "DOCKED",
                                      "detached-required");
     }
-    if (!system_voice_is_stop_command(command) &&
-            system_voice_is_docked_command(command) &&
+    if (system_voice_is_docked_command(command) &&
             last_link_status != LINK_STATUS_DOCKED)
     {
         return system_voice_decision(SYSTEM_COMMAND_STATE_REJECTED,
                                      "POSITION", "DETACHED",
                                      "docked-required");
     }
-    if (!system_voice_is_stop_command(command) &&
-            system_voice_is_detached_command(command))
+    if (system_voice_is_detached_command(command))
     {
         bucket_state = system_bucket_state_get();
         if (bucket_state != SYSTEM_BUCKET_STATE_NORMAL)
@@ -2846,16 +3475,17 @@ system_command_decision_t system_voice_command_execute(voice_command_t command)
 
     switch (command)
     {
-    case VOICE_COMMAND_FOOTBATH_START:
+    case VOICE_COMMAND_FOOTBATH_CONTINUE:
         constant_temperature = true;
         bucket_working_sync_function_icons(&guider_ui);
         serial_bucket_heat();
         system_voice_massage_start();
+        timer_set = 20u * 60u;
+        system_bucket_timer_apply();
         return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
                                      "BUCKET", "NORMAL", "accepted");
     case VOICE_COMMAND_FOOTBATH_STOP:
-        (void)system_voice_stop_runtime();
-        serial_base_standby();
+        system_bucket_stop();
         return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
                                      "BUCKET", "NORMAL", "accepted");
     case VOICE_COMMAND_MASSAGE_START:
@@ -2876,33 +3506,31 @@ system_command_decision_t system_voice_command_execute(voice_command_t command)
         system_voice_temp_step(-2);
         return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
                                      "BUCKET", "NORMAL", "accepted");
-    case VOICE_COMMAND_DRY_START:
+    case VOICE_COMMAND_FOOTBATH_START:
     {
         system_command_decision_t start_decision =
-            system_base_flow_request_start(SYSTEM_BASE_FLOW_DRYING,
+            system_base_flow_request_start(SYSTEM_BASE_FLOW_WATERING,
                                            SYSTEM_ACTION_SOURCE_VOICE);
 
         if (start_decision.result != SYSTEM_COMMAND_ACCEPTED)
         {
             return start_decision;
         }
-    }
-    serial_base_hot_dry(1u);
-    return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
-                                 "BASE", "DRYING", "accepted");
-    case VOICE_COMMAND_DRY_STOP:
-        if (g_base_flow != SYSTEM_BASE_FLOW_DRYING)
+        to_preparing_flat = 1;
+        system_auto_water_navigation_arm();
+        if (!navigate_to_screen(UI_SCREEN_PREPARING))
         {
+            to_preparing_flat = 0;
+            system_auto_water_navigation_cancel();
+            system_base_flow_finish(SYSTEM_BASE_FLOW_WATERING,
+                                    "voice-water-page-failed");
             return system_voice_decision(SYSTEM_COMMAND_INTERLOCK_REJECTED,
-                                         "BASE",
-                                         system_base_flow_name(g_base_flow),
-                                         "drying-not-active");
+                                         "BASE", "IDLE",
+                                         "page-navigation-failed");
         }
-        serial_base_standby();
-        system_base_flow_finish(SYSTEM_BASE_FLOW_DRYING,
-                                "voice-dry-stop");
-        return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
-                                     "BASE", "IDLE", "accepted");
+    }
+    return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
+                                 "BASE", "WATERING", "accepted");
     case VOICE_COMMAND_CLEAN_START:
     {
         system_command_decision_t start_decision =
@@ -2938,9 +3566,7 @@ system_command_decision_t system_voice_command_execute(voice_command_t command)
                                          system_base_flow_name(g_base_flow),
                                          "self-clean-not-active");
         }
-        system_voice_stop_self_clean();
-        serial_base_standby();
-        (void)navigate_to_screen(UI_SCREEN_INDEX);
+        system_self_clean_stop();
         return system_voice_decision(SYSTEM_COMMAND_ACCEPTED,
                                      "BASE", "IDLE", "accepted");
     default:
@@ -2953,6 +3579,8 @@ system_command_decision_t system_voice_command_execute(voice_command_t command)
 // 点击模式按钮后，应用该模式的设置
 void apply_mode_to_runtime(lv_event_t *e)
 {
+    int mode_index;
+
     if (e == NULL)
     {
         return;
@@ -2963,40 +3591,20 @@ void apply_mode_to_runtime(lv_event_t *e)
     {
         return;
     }
-
-
-    int mode_index = (int)(uintptr_t)lv_event_get_user_data(e);
-    if (mode_index < 0 || mode_index >= (int)g_mode_count)
+    if (system_mcu_link_state_get() != SYSTEM_MCU_LINK_ONLINE)
     {
         return;
     }
 
-    current_selected_mode_index = mode_index;
-    const system_mode_t *mode = &g_mode_settings[mode_index];
-    if (mode == NULL)
+    mode_index = (int)(uintptr_t)lv_event_get_user_data(e);
+    if (system_mode_apply_index(mode_index) != 0)
     {
         return;
     }
-
-    is_self_cleaning = false;
-    index_sync_selection_ui(&guider_ui);
-
-    temp_set = mode->temperature;
-    timer_set = mode->time_sec;
-    water_level = mode->water_level;
-    use_drug1 = mode->use_drug1;
-    use_drug2 = mode->use_drug2;
-
-    //修改temp_value的显示值
-    update_temp_set(&guider_ui);
-
-    //修改time_info的显示值，用min做单位
-    update_timer_set(&guider_ui);
-
-    apply_water_level_ui(water_level);
-    apply_use_drug_ui(use_drug1, use_drug2);
+    system_manager_refresh_base_ui();
 }
 
+// 缺液字体拼接
 static void liquid_shortage_build_text(uint8_t shortage_mask,
                                        char *text,
                                        size_t text_size)
@@ -3043,6 +3651,7 @@ static void liquid_shortage_build_text(uint8_t shortage_mask,
     (void)snprintf(text + used, text_size - used, "缺液");
 }
 
+// 缺液提示UI更新
 static void system_ui_apply_liquid_shortage(uint8_t shortage_mask)
 {
     lv_obj_t *icon = guider_ui.index_img_need_liquid;
@@ -3085,6 +3694,7 @@ void system_ui_schedule_liquid_shortage(uint8_t shortage_mask)
                   (void *)(uintptr_t)(shortage_mask));
 }
 
+// 刷新首页UI显示
 void index_page_init(lv_ui *ui)
 {
     if (ui == NULL)
@@ -3094,7 +3704,9 @@ void index_page_init(lv_ui *ui)
 
     index_sync_selection_ui(ui);
     //刷新温度显示
+    apply_water_level_ui(water_level);
     update_temp_set(ui);
+    apply_use_drug_ui(use_drug1, use_drug2);
     system_ui_apply_liquid_shortage(serial_mcu_liquid_shortage_mask());
 
     // 清空控件容器，避免重复添加
@@ -3176,12 +3788,12 @@ void location_page_init(lv_ui *ui)
     lv_obj_clean(ui->location_cont_2);
 
 
-    for (index = 1; index < g_location_count; ++index)
+    for (index = 0; index < g_location_count; ++index)
     {
         const system_location_t *location = &g_location_settings[index];
 
-        x_offset = (int)((index - 1) % 2) * (w + w_span);
-        y_offset = (int)((index - 1) / 2) * (h + h_span);
+        x_offset = (int)(index % 2) * (w + w_span);
+        y_offset = (int)(index / 2) * (h + h_span);
         lv_obj_t *btn = imgbtn_create(ui->location_cont_2,
                                       &_local_RGB565A8_100x100,
                                       location->name,
@@ -3286,6 +3898,8 @@ void conf_mode_detail_init(lv_ui *ui)
         apply_dropdown_list_font(ui->conf_mode_detail_combo_water_level);
         apply_dropdown_list_font(ui->conf_mode_detail_combo_medicinal);
         apply_dropdown_list_font(ui->conf_mode_detail_combo_location);
+        lv_obj_add_event_cb(ui->conf_mode_detail_combo_location, mode_station_changed,
+                            LV_EVENT_VALUE_CHANGED, NULL);
     }
 
 
@@ -3330,8 +3944,8 @@ void conf_mode_detail_init(lv_ui *ui)
                              mode->water_level > 2u ? 2u : mode->water_level);
     lv_dropdown_set_selected(ui->conf_mode_detail_combo_medicinal,
                              get_medicinal_dropdown_index(mode));
-    lv_dropdown_set_selected(ui->conf_mode_detail_combo_location,
-                             mode->position < 0 ? 0 : (mode->position > 3 ? 3 : (uint16_t)mode->position));
+    snprintf(g_mode_edit_station_name, sizeof(g_mode_edit_station_name), "%s", mode->station_name);
+    mode_station_dropdown_refresh(ui);
 }
 
 void conf_location_init(lv_ui *ui)
@@ -3377,7 +3991,7 @@ void conf_location_init(lv_ui *ui)
         label = lv_label_create(ui->conf_location_cont_2);
         lv_obj_set_pos(label, CONF_LOCATION_LABEL_X, (lv_coord_t)(row_y + CONF_LOCATION_LABEL_Y_OFFSET));
         lv_obj_set_size(label, CONF_LOCATION_LABEL_WIDTH, CONF_LOCATION_LABEL_HEIGHT);
-        snprintf(label_text, sizeof(label_text), "定位%d", location->index + 1);
+        snprintf(label_text, sizeof(label_text), "定位%u", (unsigned int)(index + 1u));
         lv_label_set_text(label, label_text);
         lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
         conf_location_apply_label_style(label);
@@ -3387,7 +4001,8 @@ void conf_location_init(lv_ui *ui)
         lv_obj_set_size(textarea, CONF_LOCATION_NAME_WIDTH, CONF_LOCATION_FIELD_HEIGHT);
         lv_textarea_set_text(textarea, location->name);
         conf_location_apply_textarea_style(ui, textarea);
-        lv_obj_add_event_cb(textarea, conf_location_name_changed, LV_EVENT_VALUE_CHANGED, location);
+        /* 地图站点名称由 APP 保存，本地只读。 */
+        lv_obj_add_state(textarea, LV_STATE_DISABLED);
 
         dropdown = lv_dropdown_create(ui->conf_location_cont_2);
         lv_obj_set_pos(dropdown, CONF_LOCATION_DROPDOWN_X, row_y);
@@ -3436,48 +4051,22 @@ void preparing_move_finished_countdown(lv_timer_t *timer)
         g_preparing_page_timer = NULL;
         //跳转到working页面
         navigate_to_screen(UI_SCREEN_WORKING);
-        //ui_load_scr_animation(&guider_ui, &guider_ui.working, guider_ui.preparing_del, &guider_ui.preparing_del, setup_scr_working, LV_SCR_LOAD_ANIM_NONE, 200, 0, false, false);
     }
 }
 
-/* 等待基站连接定时器回调：每秒检查一次last_link_status，最多等5秒 */
+/* 已到达后继续等待连接；不得用等待时长推断连接成功。 */
 static void preparing_wait_link_timer_cb(lv_timer_t *timer)
 {
-    lv_ui *ui = (lv_ui *)lv_timer_get_user_data(timer);
-    if (ui == NULL)
+    if (last_link_status != LINK_STATUS_DOCKED)
     {
         return;
     }
-
-    /* 已连接上基站，执行跳转 */
-    if (last_link_status == 1)
+    if (g_preparing_page_timer == timer)
     {
-        lv_timer_delete(timer);
-        g_wait_link_retry_count = 0;
-        /* 跳转到index页面 */
-        navigate_to_screen(UI_SCREEN_INDEX);
-        /* 1小时内没有点首页任何按钮的话，自动排水 可能app点击 */
-        // g_auto_drain_timer = lv_timer_create_basic();
-        // lv_timer_set_period(g_auto_drain_timer, 36000);
-        // lv_timer_set_repeat_count(g_auto_drain_timer, 1);
-        // lv_timer_set_cb(g_auto_drain_timer, auto_drain_timer_cb);
-        return;
+        g_preparing_page_timer = NULL;
     }
-
-    /* 最多等5秒，超时后也执行跳转 */
-    g_wait_link_retry_count++;
-    if (g_wait_link_retry_count >= WAIT_LINK_MAX_RETRY)
-    {
-        lv_timer_delete(timer);
-        g_wait_link_retry_count = 0;
-        navigate_to_screen(UI_SCREEN_INDEX);
-        /* 1小时内没有点首页任何按钮的话，自动排水 可能app点击 */
-        // g_auto_drain_timer = lv_timer_create_basic();
-        // lv_timer_set_period(g_auto_drain_timer, 36000);
-        // lv_timer_set_repeat_count(g_auto_drain_timer, 1);
-        // lv_timer_set_cb(g_auto_drain_timer, auto_drain_timer_cb);
-        return;
-    }
+    lv_timer_delete(timer);
+    navigate_to_screen(UI_SCREEN_INDEX);
 }
 
 void preparing_move_finished(lv_timer_t *timer)
@@ -3517,9 +4106,10 @@ void preparing_move_finished(lv_timer_t *timer)
         }
         else
         {
-            //机器回到基站但尚未连接上，等待最多5秒让连接建立
-            lv_timer_t *wait_timer = lv_timer_create(preparing_wait_link_timer_cb, 1000, ui);
-            lv_timer_set_repeat_count(wait_timer, 5);
+            /* 等待资源由准备页统一管理，退出时取消。 */
+            lv_obj_add_flag(ui->preparing_cont_move_finished, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(ui->preparing_cont_moving, LV_OBJ_FLAG_HIDDEN);
+            g_preparing_page_timer = lv_timer_create(preparing_wait_link_timer_cb, 1000, ui);
             return;
         }
     }
@@ -3562,9 +4152,14 @@ static void refresh_auto_water_status(lv_timer_t *timer)
                     base_main_status,
                     serial_mcu_status_report_sequence()))
         {
-            const char *target_name =
-                auto_water_navigation_flow_target(&g_auto_water_navigation);
-            int target_location_index = g_auto_water_target_location_index;
+            StationInfo_t target = g_auto_water_navigation.target_station;
+
+            if (!g_auto_water_navigation.has_target)
+            {
+                SYSTEM_MANAGER_LOG_WARN("上水完成但无有效绑定站点，跳过导航和自动泡脚");
+                g_auto_water_navigation.active = false;
+                return;
+            }
 
             if (g_preparing_page_timer == timer)
             {
@@ -3575,8 +4170,7 @@ static void refresh_auto_water_status(lv_timer_t *timer)
             system_base_flow_finish(SYSTEM_BASE_FLOW_WATERING,
                                     "water-complete");
             // 开始移动
-            (void)system_start_navigation(ui->preparing, target_name,
-                                          target_location_index);
+            (void)system_start_navigation(ui->preparing, target.name, target.id, &target);
             return;
         }
     }
@@ -3601,7 +4195,12 @@ void preparing_refresh_flat2(lv_timer_t *timer)
 // 根据不同to_preparing_flat初始化不同的准备页面
 void preparing_page_init(lv_ui *ui)
 {
-    preparing_page_cleanup();
+    /* 自动上水导航已在进入页面前武装，此处不能调用 auto_water_page_cleanup()。 */
+    preparing_common_cleanup();
+    if (to_preparing_flat == 2)
+    {
+        self_clean_page_cleanup();
+    }
     preparing_stop_button_set_hidden(false);
     /* 恢复准备页默认卡片布局；自清洁分支会临时套用参考界面尺寸。 */
     lv_obj_set_pos(ui->preparing_cont_1, 14, 59);
@@ -3704,7 +4303,7 @@ void preparing_page_init(lv_ui *ui)
         if (to_preparing_flat == 4)
         {
             SYSTEM_MANAGER_LOG_USER("发送回基站充电指令");
-            if (RobotTcp_SetCharge(1) != 0)
+            if (RobotTcp_ReturnToBase() != 0)
             {
                 SYSTEM_MANAGER_LOG_ERROR("回仓充电命令发送失败");
                 show_message_dialog_and_navigate(ui->preparing,
@@ -3714,14 +4313,10 @@ void preparing_page_init(lv_ui *ui)
                                         "return-base-failed");
                 return;
             }
-            if (RobotTcp_GetStationCoordsById(0, &g_nav_target_x,
-                                              &g_nav_target_y,
-                                              &g_nav_target_z, NULL, 0) != 0)
-            {
-                g_nav_target_x = 0.0f;
-                g_nav_target_y = 0.0f;
-                g_nav_target_z = 0.0f;
-            }
+            going_to_location = 0;
+            g_return_base_report_sequence =
+                __atomic_load_n(&g_mcu_docked_report_sequence, __ATOMIC_ACQUIRE);
+            g_return_base_pending = true;
         }
 
         // 每秒请求并读取机器人状态缓存，检查机器人位置
@@ -3740,25 +4335,29 @@ void system_manager_init(lv_ui *ui)
     {
         init_default_modes();
     }
-    if (load_location_settings() != 0)
-    {
-        init_default_locations();
-    }
-
-    current_selected_mode_index = 0;
-    //apply_mode_to_runtime(ui, 0);
+    /* 站点仅由代理查询恢复，旧位置文件不得恢复虚构房间。 */
+    memset(g_location_settings, 0, sizeof(g_location_settings));
+    g_location_count = 0;
+    current_selected_location_index = -1;
 
     LV_UNUSED(ui);
 
     /* 初始首页已由 GUI Guider 创建，显式记录基站默认页面和方向。 */
     g_applied_link_status = LINK_STATUS_DOCKED;
     g_base_flow = SYSTEM_BASE_FLOW_IDLE;
-    g_drying_active_reported = false;
+    if (system_mode_apply_index(0) != 0)
+    {
+        SYSTEM_MANAGER_LOG_ERROR("开机应用助眠模式失败");
+    }
+    system_manager_refresh_base_ui();
     bucket_countdown_ensure_timer();
 
     g_mcu_watchdog_last_sequence = serial_mcu_status_report_sequence();
     g_mcu_watchdog_last_report_tick = lv_tick_get();
-    g_mcu_watchdog_outage_latched = false;
+    __atomic_store_n(&g_mcu_link_state, SYSTEM_MCU_LINK_UNKNOWN,
+                     __ATOMIC_RELEASE);
+    __atomic_store_n(&g_mcu_low_battery_handled, false,
+                     __ATOMIC_RELEASE);
     if (g_mcu_report_watchdog_timer == NULL)
     {
         g_mcu_report_watchdog_timer = lv_timer_create(
@@ -3769,50 +4368,144 @@ void system_manager_init(lv_ui *ui)
 
 }
 
+/**
+ * @brief 在目标页面稳定后显示MCU断连保护层。
+ *
+ * @param delayed true表示等待页面切换完成后再显示，false表示立即挂到活动页。
+ */
+static void mcu_watchdog_show_outage_guard(bool delayed)
+{
+    lv_obj_t *active_screen;
+
+    if (delayed)
+    {
+        mcu_outage_guard_show_delayed(MCU_OUTAGE_GUARD_SHOW_DELAY_MS);
+        return;
+    }
+
+    active_screen = lv_screen_active();
+    if (active_screen != NULL)
+    {
+        mcu_outage_guard_show(active_screen);
+    }
+}
+
+/**
+ * @brief 处理看门狗观察到的新合法状态帧并刷新链路时间基线。
+ *
+ * @param report_sequence 最新合法状态帧序号。
+ * @param now_tick 当前LVGL时钟值。
+ */
+static void mcu_watchdog_handle_report(uint32_t report_sequence,
+                                       uint32_t now_tick)
+{
+    system_mcu_link_state_t previous_state;
+
+    g_mcu_watchdog_last_sequence = report_sequence;
+    g_mcu_watchdog_last_report_tick = now_tick;
+    previous_state = __atomic_exchange_n(&g_mcu_link_state,
+                                         SYSTEM_MCU_LINK_ONLINE,
+                                         __ATOMIC_ACQ_REL);
+    if (previous_state == SYSTEM_MCU_LINK_OUTAGE)
+    {
+        mcu_outage_guard_destroy();
+        SYSTEM_MANAGER_LOG_USER("MCU状态上报已恢复");
+    }
+}
+
+/**
+ * @brief 处理开机后始终未收到首帧的超时场景。
+ */
+static void mcu_watchdog_handle_initial_timeout(void)
+{
+    lv_obj_t *active_screen;
+
+    __atomic_store_n(&g_mcu_link_state, SYSTEM_MCU_LINK_OUTAGE,
+                     __ATOMIC_RELEASE);
+    SYSTEM_MANAGER_LOG_ERROR("MCU开机超时未上报消息");
+    serial_base_standby();
+    active_screen = lv_screen_active();
+    if (active_screen != guider_ui.index)
+    {
+        (void)navigate_to_screen(UI_SCREEN_INDEX);
+        mcu_watchdog_show_outage_guard(true);
+    }
+    else if (active_screen != NULL)
+    {
+        mcu_watchdog_show_outage_guard(false);
+    }
+}
+
+/**
+ * @brief 处理已在线设备停止上报后的安全停止、页面归位和触摸保护。
+ */
+static void mcu_watchdog_handle_online_timeout(void)
+{
+    bool delays_guard_for_navigation;
+
+    __atomic_store_n(&g_mcu_link_state, SYSTEM_MCU_LINK_OUTAGE,
+                     __ATOMIC_RELEASE);
+    SYSTEM_MANAGER_LOG_ERROR("MCU未上报消息");
+    delays_guard_for_navigation = last_link_status == LINK_STATUS_DOCKED &&
+                                  g_base_flow != SYSTEM_BASE_FLOW_MOVING;
+    system_active_flow_stop();
+
+    if (last_link_status == LINK_STATUS_DETACHED &&
+            g_base_flow != SYSTEM_BASE_FLOW_MOVING &&
+            lv_screen_active() != guider_ui.working)
+    {
+        (void)navigate_to_screen(UI_SCREEN_WORKING);
+        delays_guard_for_navigation = true;
+    }
+
+    /* 页面归位后延迟获取活动页，避免把保护层挂回动画中的旧页面。 */
+    mcu_watchdog_show_outage_guard(delays_guard_for_navigation);
+}
+
+/**
+ * @brief 根据当前MCU链路状态分发首次超时或运行中断连处理。
+ */
+static void mcu_watchdog_handle_timeout(void)
+{
+    system_mcu_link_state_t current_state = system_mcu_link_state_get();
+
+    if (current_state == SYSTEM_MCU_LINK_UNKNOWN)
+    {
+        mcu_watchdog_handle_initial_timeout();
+    }
+    else if (current_state == SYSTEM_MCU_LINK_ONLINE)
+    {
+        mcu_watchdog_handle_online_timeout();
+    }
+}
+
+/**
+ * @brief 周期检查MCU合法状态帧是否更新，并在超过阈值时触发断连处理。
+ */
 static void mcu_report_watchdog_timer_cb(lv_timer_t *timer)
 {
     uint32_t report_sequence = serial_mcu_status_report_sequence();
     uint32_t now_tick = lv_tick_get();
-    lv_obj_t *active_screen;
 
     LV_UNUSED(timer);
-
     if (report_sequence != g_mcu_watchdog_last_sequence)
     {
-        g_mcu_watchdog_last_sequence = report_sequence;
-        g_mcu_watchdog_last_report_tick = now_tick;
-        g_mcu_watchdog_outage_latched = false;
-        if (g_base_flow == SYSTEM_BASE_FLOW_DRYING)
-        {
-            if (base_main_status == 15u)
-            {
-                g_drying_active_reported = true;
-            }
-            else if (g_drying_active_reported && base_main_status == 3u)
-            {
-                system_base_flow_finish(SYSTEM_BASE_FLOW_DRYING,
-                                        "drying-complete");
-            }
-        }
+        mcu_watchdog_handle_report(report_sequence, now_tick);
         return;
     }
 
-    if (g_mcu_watchdog_outage_latched ||
-            lv_tick_elaps(g_mcu_watchdog_last_report_tick) <
+    if (lv_tick_elaps(g_mcu_watchdog_last_report_tick) <
             MCU_REPORT_TIMEOUT_MS)
     {
         return;
     }
 
-    g_mcu_watchdog_outage_latched = true;
-    SYSTEM_MANAGER_LOG_ERROR("MCU未上报消息");
-    serial_base_standby();
+    mcu_watchdog_handle_timeout();
+}
 
-    active_screen = lv_screen_active();
-    if (active_screen != NULL)
-    {
-        show_message_dialog(active_screen, "设备状态异常，请回仓重启");
-    }
+system_mcu_link_state_t system_mcu_link_state_get(void)
+{
+    return __atomic_load_n(&g_mcu_link_state, __ATOMIC_ACQUIRE);
 }
 
 static void system_ui_apply_link_status(uint8_t link_status)
@@ -3821,17 +4514,25 @@ static void system_ui_apply_link_status(uint8_t link_status)
     lv_obj_t *target_obj;
     int rotation;
     int16_t previous_link_status = g_applied_link_status;
+    bool keep_navigation_page;
+
+    keep_navigation_page = g_base_flow == SYSTEM_BASE_FLOW_MOVING &&
+                           (g_return_base_pending ||
+                            (g_auto_water_navigation.active &&
+                             g_auto_water_navigation.completion_handled));
 
     if (link_status == LINK_STATUS_DOCKED)
     {
-        target_screen = UI_SCREEN_INDEX;
-        target_obj = guider_ui.index;
+        target_screen = keep_navigation_page ? UI_SCREEN_PREPARING : UI_SCREEN_INDEX;
+        target_obj = keep_navigation_page ? guider_ui.preparing : guider_ui.index;
         rotation = UI_ROTATION_DOCKED;
     }
     else if (link_status == LINK_STATUS_DETACHED)
     {
-        target_screen = UI_SCREEN_WORKING;
-        target_obj = guider_ui.working;
+        target_screen = keep_navigation_page ?
+                        UI_SCREEN_PREPARING : UI_SCREEN_WORKING;
+        target_obj = keep_navigation_page ?
+                     guider_ui.preparing : guider_ui.working;
         rotation = UI_ROTATION_DETACHED;
     }
     else
@@ -3840,22 +4541,52 @@ static void system_ui_apply_link_status(uint8_t link_status)
         return;
     }
 
+    if (link_status == LINK_STATUS_DOCKED && preparing_return_base_try_finish())
+    {
+        keep_navigation_page = false;
+        target_screen = UI_SCREEN_INDEX;
+        target_obj = guider_ui.index;
+    }
+
     if (g_applied_link_status == (int16_t)link_status)
     {
         return;
     }
+    SYSTEM_MANAGER_LOG_USER("LINK_DIAG rotation begin: rotation=%d", rotation);
     if (lv_port_set_rotation(rotation) != 0)
     {
         SYSTEM_MANAGER_LOG_ERROR("应用 LINK_STATUS 方向失败: status=0x%02X rotation=%d",
                                  link_status, rotation);
         return;
     }
+    SYSTEM_MANAGER_LOG_USER("LINK_DIAG rotation end");
 
     g_applied_link_status = (int16_t)link_status;
     if (link_status == LINK_STATUS_DETACHED &&
             previous_link_status == LINK_STATUS_DOCKED)
     {
-        bucket_auto_start_detached();
+        if (keep_navigation_page)
+        {
+            SYSTEM_MANAGER_LOG_USER(
+                "导航离站期间保持移动页并等待到达");
+            if (auto_water_navigation_try_start_bucket())
+            {
+                return;
+            }
+        }
+        else
+        {
+            if (g_base_flow == SYSTEM_BASE_FLOW_WATERING ||
+                    g_base_flow == SYSTEM_BASE_FLOW_SELF_CLEANING)
+            {
+                SYSTEM_MANAGER_LOG_USER(
+                    "基站流程期间检测到离站，仅清理本地状态: active=%s",
+                    system_base_flow_name(g_base_flow));
+                system_base_runtime_cleanup_without_command(
+                    "link-status-detached");
+            }
+            SYSTEM_MANAGER_LOG_USER("普通离站仅切换 working 页面，不自动启动 A2/A6");
+        }
     }
     else if (link_status == LINK_STATUS_DOCKED)
     {
@@ -3863,21 +4594,103 @@ static void system_ui_apply_link_status(uint8_t link_status)
     }
     if (lv_screen_active() != target_obj)
     {
+        SYSTEM_MANAGER_LOG_USER("LINK_DIAG navigate begin: screen=%d", target_screen);
         navigate_to_screen(target_screen);
+        SYSTEM_MANAGER_LOG_USER("LINK_DIAG navigate end");
     }
     SYSTEM_MANAGER_LOG_USER("已应用 LINK_STATUS UI: status=0x%02X rotation=%d",
                             link_status, rotation);
 }
 
-static void system_ui_apply_link_status_async(void *user_data)
-{
-    uint8_t link_status = (uint8_t)(uintptr_t)user_data;
+static void system_mcu_status_ui_schedule(uint8_t link_status);
 
-    system_ui_apply_link_status(link_status);
+static void system_low_battery_protection_apply(uint8_t link_status)
+{
+    bool was_handled;
+    lv_obj_t *active_screen;
+
+    if (link_status != LINK_STATUS_DETACHED ||
+            system_mcu_link_state_get() != SYSTEM_MCU_LINK_ONLINE ||
+            serial_mcu_battery_percent() >= MCU_LOW_BATTERY_THRESHOLD_PERCENT)
+    {
+        return;
+    }
+
+    was_handled = __atomic_exchange_n(&g_mcu_low_battery_handled, true,
+                                      __ATOMIC_ACQ_REL);
+    if (was_handled)
+    {
+        return;
+    }
+
+    SYSTEM_MANAGER_LOG_WARN("检测到离站低电，停止泡脚并下发A1");
+    system_bucket_stop();
+    active_screen = lv_screen_active();
+    if (active_screen != NULL)
+    {
+        show_message_dialog(active_screen, "电量过低");
+    }
 }
 
-void system_ui_schedule_link_status(uint8_t link_status)
+static void system_mcu_status_ui_async(void *user_data)
 {
+    uint8_t link_status;
+    uint8_t latest_link_status;
+
+    LV_UNUSED(user_data);
+    link_status = __atomic_load_n(&g_mcu_pending_link_status,
+                                  __ATOMIC_ACQUIRE);
+
+    if (system_mcu_link_state_get() == SYSTEM_MCU_LINK_ONLINE)
+    {
+        /* 在同一个LVGL事务内先清理保护层，再应用页面和方向。 */
+        mcu_outage_guard_destroy();
+        system_ui_apply_link_status(link_status);
+        system_low_battery_protection_apply(link_status);
+    }
+
+    __atomic_store_n(&g_mcu_status_ui_pending, false, __ATOMIC_RELEASE);
+    latest_link_status = __atomic_load_n(&g_mcu_pending_link_status,
+                                         __ATOMIC_ACQUIRE);
+    if (latest_link_status != link_status &&
+            system_mcu_link_state_get() == SYSTEM_MCU_LINK_ONLINE)
+    {
+        system_mcu_status_ui_schedule(latest_link_status);
+    }
+}
+
+static void system_mcu_status_ui_schedule(uint8_t link_status)
+{
+    bool was_pending;
+
+    __atomic_store_n(&g_mcu_pending_link_status, link_status, __ATOMIC_RELEASE);
+    was_pending = __atomic_exchange_n(&g_mcu_status_ui_pending, true,
+                                      __ATOMIC_ACQ_REL);
+    if (was_pending)
+    {
+        return;
+    }
+
+    if (lv_async_call(system_mcu_status_ui_async, NULL) != LV_RESULT_OK)
+    {
+        __atomic_store_n(&g_mcu_status_ui_pending, false, __ATOMIC_RELEASE);
+        SYSTEM_MANAGER_LOG_ERROR(
+            "投递MCU状态恢复事务失败: link_status=0x%02X", link_status);
+    }
+}
+
+void system_mcu_status_report_notify(uint8_t link_status)
+{
+    system_mcu_link_state_t previous_state;
+
+    previous_state = __atomic_exchange_n(&g_mcu_link_state,
+                                         SYSTEM_MCU_LINK_ONLINE,
+                                         __ATOMIC_ACQ_REL);
+    if (previous_state == SYSTEM_MCU_LINK_OUTAGE)
+    {
+        SYSTEM_MANAGER_LOG_USER("MCU合法状态帧已恢复链路");
+    }
+
     if (link_status != LINK_STATUS_DETACHED &&
             link_status != LINK_STATUS_DOCKED)
     {
@@ -3885,8 +4698,22 @@ void system_ui_schedule_link_status(uint8_t link_status)
         return;
     }
 
-    lv_async_call(system_ui_apply_link_status_async,
-                  (void *)(uintptr_t)link_status);
+    /* 单独发布在站帧序号，避免旧在站状态与新离站帧序号拼成回仓确认。 */
+    if (link_status == LINK_STATUS_DOCKED)
+    {
+        __atomic_store_n(&g_mcu_docked_report_sequence,
+                         serial_mcu_status_report_sequence(), __ATOMIC_RELEASE);
+    }
+    system_mcu_status_ui_schedule(link_status);
+}
+
+void system_mcu_battery_report_notify(uint8_t battery_percent)
+{
+    if (battery_percent >= MCU_LOW_BATTERY_THRESHOLD_PERCENT)
+    {
+        __atomic_store_n(&g_mcu_low_battery_handled, false,
+                         __ATOMIC_RELEASE);
+    }
 }
 
 size_t system_mode_get_count(void)
@@ -3929,19 +4756,32 @@ int16_t system_current_temp_get(void)
            g_bucket_temp_edit.actual_temp : 0;
 }
 
-void system_manager_refresh_current_page(void)
+// 刷新基站页面显示
+void system_manager_refresh_base_ui(void)
 {
     index_sync_selection_ui(&guider_ui);
     update_temp_set(&guider_ui);
     update_timer_set(&guider_ui);
     apply_water_level_ui(water_level);
     apply_use_drug_ui(use_drug1, use_drug2);
+}
+
+// 刷新桶体页面显示
+void system_manager_refresh_working_ui(void)
+{
+    bucket_temp_show_actual(guider_ui.working_label_temperature);
+    bucket_countdown_update_label();
     bucket_working_sync_function_icons(&guider_ui);
 }
 
 void system_manager_refresh_ui(void)
 {
-    system_manager_refresh_current_page();
+    if (g_applied_link_status == LINK_STATUS_DETACHED)
+    {
+        system_manager_refresh_working_ui();
+        return;
+    }
+    system_manager_refresh_base_ui();
 }
 
 void system_start_flow(void)
@@ -3973,59 +4813,35 @@ void system_start_flow(void)
 
 void system_select_self_clean(void)
 {
-    is_self_cleaning = true;
-    system_manager_refresh_current_page();
-}
-
-void system_stop_flow(void)
-{
-    system_base_flow_t active_flow = g_base_flow;
-
-    preparing_page_cleanup();
-    if (active_flow != SYSTEM_BASE_FLOW_IDLE)
+    if (system_mcu_link_state_get() != SYSTEM_MCU_LINK_ONLINE)
     {
-        system_base_flow_finish(active_flow, "tcp-stop");
+        return;
     }
-    serial_base_standby();
-    to_preparing_flat = 0;
-    (void)navigate_to_screen(UI_SCREEN_INDEX);
+    is_self_cleaning = true;
+    system_manager_refresh_base_ui();
 }
 
 void conf_mode_detail_save_clicked(lv_event_t *e)
 {
-    int code = lv_event_get_code(e);
-    if (code != LV_EVENT_CLICKED)
+    size_t index = (size_t)current_selected_mode_index;
+    system_mode_t old_mode;
+
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED || index >= g_mode_count)
     {
         return;
     }
-    size_t index = (size_t)current_selected_mode_index;
-
-    if (index >= g_mode_count)
+    old_mode = g_mode_settings[index];
+    update_mode_from_detail_ui(&g_mode_settings[index]);
+    if (persist_mode_settings() != 0)
     {
-        return ;
+        g_mode_settings[index] = old_mode;
+        SYSTEM_MANAGER_LOG_ERROR("模式保存失败，未应用本次修改");
+        show_message_dialog(guider_ui.conf_mode_detail, "设置保存失败");
+        return;
     }
-
-    system_mode_t *mode = &g_mode_settings[index];
-
-    if (mode == NULL || mode->name[0] == '\0')
-    {
-        return ;
-    }
-
-    if (index >= SYSTEM_MODE_MAX_COUNT)
-    {
-        return ;
-    }
-
-    update_mode_from_detail_ui(mode);
     conf_mode_detail_keyboard_cleanup(&guider_ui);
-
-    if (mode->name[0] == '\0')
-    {
-        return ;
-    }
-
-    persist_mode_settings();
+    SYSTEM_MANAGER_LOG_USER("模式已保存: %s 站点=%s",
+                            g_mode_settings[index].name, g_mode_settings[index].station_name);
     show_message_dialog(guider_ui.conf_mode_detail, "设置已保存");
 }
 
@@ -4089,7 +4905,7 @@ void conf_mode_detail_restore_default_clicked(lv_event_t *e)
         mode->temperature = 37;
         mode->use_drug1 = true;
         mode->use_drug2 = false;
-        mode->position = 1;
+        mode->station_name[0] = '\0';
         break;
     case 1:
         snprintf(mode->name, sizeof(mode->name), "放松");
@@ -4099,7 +4915,7 @@ void conf_mode_detail_restore_default_clicked(lv_event_t *e)
         mode->temperature = 39;
         mode->use_drug1 = false;
         mode->use_drug2 = true;
-        mode->position = 2;
+        mode->station_name[0] = '\0';
         break;
     case 2:
         snprintf(mode->name, sizeof(mode->name), "驱寒");
@@ -4109,7 +4925,7 @@ void conf_mode_detail_restore_default_clicked(lv_event_t *e)
         mode->temperature = 41;
         mode->use_drug1 = true;
         mode->use_drug2 = true;
-        mode->position = 3;
+        mode->station_name[0] = '\0';
         break;
     default:
         return;
@@ -4162,6 +4978,10 @@ void plus_clicked(lv_event_t *e)
     {
     case LV_EVENT_CLICKED:
     {
+        if (system_mcu_link_state_get() != SYSTEM_MCU_LINK_ONLINE)
+        {
+            return;
+        }
         lv_ui *ui = lv_event_get_user_data(e);
         if (ui != NULL)
         {
@@ -4230,6 +5050,10 @@ void water_clicked(lv_event_t *e)
 
 void action_temp_plus(lv_ui *ui)
 {
+    if (system_mcu_link_state_get() != SYSTEM_MCU_LINK_ONLINE)
+    {
+        return;
+    }
     if (temp_set < TEMP_MAX)
     {
         temp_set++;
@@ -4238,6 +5062,10 @@ void action_temp_plus(lv_ui *ui)
 }
 void action_temp_minus(lv_ui *ui)
 {
+    if (system_mcu_link_state_get() != SYSTEM_MCU_LINK_ONLINE)
+    {
+        return;
+    }
     if (temp_set > TEMP_MIN)
     {
         temp_set--;
@@ -4246,6 +5074,10 @@ void action_temp_minus(lv_ui *ui)
 }
 void action_time_loop(lv_ui *ui)
 {
+    if (system_mcu_link_state_get() != SYSTEM_MCU_LINK_ONLINE)
+    {
+        return;
+    }
     //时间设置，每设置一次加300，最大1800,最小600
     timer_set += 300;
     if (timer_set > 1800)
@@ -4256,6 +5088,10 @@ void action_time_loop(lv_ui *ui)
 }
 void action_water_loop(lv_ui *ui)
 {
+    if (system_mcu_link_state_get() != SYSTEM_MCU_LINK_ONLINE)
+    {
+        return;
+    }
     //水位设置，每设置一次加1，最大3,最小0
     water_level++;
     if (water_level > 2)
@@ -4271,6 +5107,10 @@ void action_use_drug1_toggle(lv_event_t *e)
     {
     case LV_EVENT_CLICKED:
     {
+        if (system_mcu_link_state_get() != SYSTEM_MCU_LINK_ONLINE)
+        {
+            return;
+        }
         lv_ui *ui = lv_event_get_user_data(e);
         if (ui != NULL)
         {
@@ -4291,6 +5131,10 @@ void action_use_drug2_toggle(lv_event_t *e)
     {
     case LV_EVENT_CLICKED:
     {
+        if (system_mcu_link_state_get() != SYSTEM_MCU_LINK_ONLINE)
+        {
+            return;
+        }
         lv_ui *ui = lv_event_get_user_data(e);
         if (ui != NULL)
         {
@@ -4312,6 +5156,10 @@ void action_clean_clicked(lv_event_t *e)
     {
     case LV_EVENT_CLICKED:
     {
+        if (system_mcu_link_state_get() != SYSTEM_MCU_LINK_ONLINE)
+        {
+            return;
+        }
         //隐藏cont_2,显示cont_clean
         lv_ui *ui = lv_event_get_user_data(e);
         if (ui != NULL)
@@ -4511,6 +5359,7 @@ static void update_self_cleaning_progress(lv_ui *ui)
         is_self_cleaning = false;
         system_base_flow_finish(SYSTEM_BASE_FLOW_SELF_CLEANING,
                                 "self-clean-complete");
+        (void)voice_command_service_play_prompt(VOICE_PROMPT_CLEAN_FINISH);
         if (g_preparing_page_timer != NULL)
         {
             lv_timer_delete(g_preparing_page_timer);
@@ -4603,27 +5452,7 @@ void working_constant_temperature_toggle(lv_event_t *e)
     {
         return;
     }
-    lv_ui *ui = lv_event_get_user_data(e);
-    if (ui == NULL)
-    {
-        return;
-    }
-    constant_temperature = !constant_temperature;
-    if (constant_temperature)
-    {
-        int16_t target = g_bucket_temp_edit.editing ? g_bucket_temp_edit.target_temp :
-                         bucket_temp_base_value();
-        temp_set = bucket_temp_clamp(target);
-        lv_obj_remove_flag(ui->working_img_constant_temperature, LV_OBJ_FLAG_HIDDEN);
-        serial_bucket_heat();
-        bucket_temp_clear_edit(ui->working_label_temperature);
-    }
-    else
-    {
-        lv_obj_add_flag(ui->working_img_constant_temperature, LV_OBJ_FLAG_HIDDEN);
-        serial_bucket_stop_heat();
-        bucket_temp_clear_edit(ui->working_label_temperature);
-    }
+    (void)system_bucket_heat_set(!constant_temperature);
 }
 
 // 按UV灯
@@ -4635,21 +5464,7 @@ void working_sterilization_toggle(lv_event_t *e)
     {
         return;
     }
-    lv_ui *ui = lv_event_get_user_data(e);
-    if (ui == NULL)
-    {
-        return;
-    }
-    sterilization = !sterilization;
-    if (sterilization)
-    {
-        lv_obj_remove_flag(ui->working_img_sterilization, LV_OBJ_FLAG_HIDDEN);
-    }
-    else
-    {
-        lv_obj_add_flag(ui->working_img_sterilization, LV_OBJ_FLAG_HIDDEN);
-    }
-    serial_bucket_uv();
+    (void)system_bucket_uv_set(!sterilization);
 }
 
 // 设置按摩强度
@@ -4661,42 +5476,7 @@ void working_massage_intensity_clicked(lv_event_t *e)
     {
         return;
     }
-
-    lv_ui *ui = lv_event_get_user_data(e);
-    if (ui == NULL)
-    {
-        return;
-    }
-    massage_intensity++;
-    if (massage_intensity > 3)
-    {
-        massage_intensity = 0;
-    }
-    if (massage_intensity == 0)
-    {
-        lv_obj_add_flag(ui->working_img_massage_intensity0, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(ui->working_img_massage_intensity1, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(ui->working_img_massage_intensity2, LV_OBJ_FLAG_HIDDEN);
-    }
-    else if (massage_intensity == 1)
-    {
-        lv_obj_remove_flag(ui->working_img_massage_intensity0, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(ui->working_img_massage_intensity1, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(ui->working_img_massage_intensity2, LV_OBJ_FLAG_HIDDEN);
-    }
-    else if (massage_intensity == 2)
-    {
-        lv_obj_remove_flag(ui->working_img_massage_intensity0, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_flag(ui->working_img_massage_intensity1, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(ui->working_img_massage_intensity2, LV_OBJ_FLAG_HIDDEN);
-    }
-    else
-    {
-        lv_obj_remove_flag(ui->working_img_massage_intensity0, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_flag(ui->working_img_massage_intensity1, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_remove_flag(ui->working_img_massage_intensity2, LV_OBJ_FLAG_HIDDEN);
-    }
-    serial_bucket_massage();
+    (void)system_bucket_massage_set((massage_intensity + 1) % 4);
 }
 void working_show_return_dialog(lv_event_t *e)
 {
@@ -4732,21 +5512,6 @@ void working_pause_clicked(lv_event_t *e)
         bucket_standby_cancel_press();
     }
 }
-void working_play_clicked(lv_event_t *e)
-{
-    lv_event_code_t code = lv_event_get_code(e);
-
-    if (code != LV_EVENT_CLICKED)
-    {
-        return;
-    }
-    lv_ui *ui = lv_event_get_user_data(e);
-    lv_obj_add_flag(ui->working_cont_pause, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_remove_flag(ui->working_cont_playing, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(g_working_play_btn, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_remove_flag(g_working_pause_btn, LV_OBJ_FLAG_HIDDEN);
-    serial_bucket_timer();
-}
 void working_refresh(lv_timer_t *timer)
 {
     lv_ui *ui = (lv_ui *)lv_timer_get_user_data(timer);
@@ -4762,138 +5527,40 @@ void working_refresh(lv_timer_t *timer)
     bucket_countdown_refresh();
 
 }
-void working_page_init(lv_ui *ui)
+void system_manager_working_page_init(lv_ui *ui)
 {
     if (ui == NULL)
     {
         return;
     }
+
+    SYSTEM_MANAGER_LOG_USER("LINK_DIAG system_manager_working_page_init enter");
     if (g_working_timer != NULL)
     {
         lv_timer_del(g_working_timer);
         g_working_timer = NULL;
     }
+
     working_return_dialog_cleanup();
     g_bucket_countdown.display_label = ui->working_label_time_left;
     bucket_countdown_set_label_visible(!g_bucket_countdown.editing ||
                                        g_bucket_countdown.blink_visible);
     bucket_countdown_refresh();
 
-    //这里添加一个定时器，用于更新实际温度
+    // 创建工作页定时器，每秒刷新实际温度。
     g_working_timer = lv_timer_create_basic();
     lv_timer_set_period(g_working_timer, 1000);
     lv_timer_set_repeat_count(g_working_timer, -1);
     lv_timer_set_user_data(g_working_timer, ui);
     lv_timer_set_cb(g_working_timer, working_refresh);
+
     g_bucket_temp_edit.display_label = ui->working_label_temperature;
     if (!g_bucket_temp_edit.editing)
     {
         bucket_temp_show_actual(ui->working_label_temperature);
     }
 
-    if (!_is_working_page_initialized)
-    {
-        if (ui->working != NULL)
-        {
-            lv_obj_add_event_cb(ui->working, working_screen_lifecycle_cb, LV_EVENT_SCREEN_UNLOAD_START, NULL);
-            lv_obj_add_event_cb(ui->working, working_screen_lifecycle_cb, LV_EVENT_DELETE, NULL);
-        }
-
-        //根据当前模式设置，载入模式按钮的图标和名称
-        size_t index = 0;
-        //调用imgbtn_create添加模式按钮时，
-        int x_offset = 0;
-        int y_offset = 0;
-        int w = 170;
-        int h = 178;
-        int w_span = 24;
-        int h_span = 22;
-        //恒温
-        x_offset = (int)(index % 2) * (w + w_span);
-        y_offset = (int)(index / 2) * (h + h_span);
-        lv_obj_t *btn_constant_temp = imgbtn_create(ui->working_cont_1, &_btn_worm_RGB565A8_100x100,
-                                      "恒温", x_offset, y_offset, w, h);
-        lv_obj_add_event_cb(btn_constant_temp, working_constant_temperature_toggle, LV_EVENT_ALL, ui);
-        //按摩
-        index++;
-        x_offset = (int)(index % 2) * (w + w_span);
-        y_offset = (int)(index / 2) * (h + h_span);
-        lv_obj_t *btn_massage = imgbtn_create(ui->working_cont_1, &_massage_RGB565A8_100x100, "按摩",
-                                              x_offset, y_offset, w, h);
-        lv_obj_add_event_cb(btn_massage, working_massage_intensity_clicked, LV_EVENT_ALL, ui);
-        //除菌
-        index++;
-        x_offset = (int)(index % 2) * (w + w_span);
-        y_offset = (int)(index / 2) * (h + h_span);
-        lv_obj_t *btn_sterilization = imgbtn_create(ui->working_cont_1, &_bacteria_RGB565A8_100x100,
-                                      "除菌", x_offset, y_offset, w, h);
-        lv_obj_add_event_cb(btn_sterilization, working_sterilization_toggle, LV_EVENT_ALL, ui);
-        //定时
-        index++;
-        x_offset = (int)(index % 2) * (w + w_span);
-        y_offset = (int)(index / 2) * (h + h_span);
-        lv_obj_t *btn_timer = imgbtn_create(ui->working_cont_1, &_timer_RGB565A8_100x100, "定时",
-                                            x_offset, y_offset, w, h);
-        lv_obj_add_event_cb(btn_timer, working_timer_clicked, LV_EVENT_ALL, ui);
-        //自动回仓
-        index++;
-        x_offset = (int)(index % 2) * (w + w_span);
-        y_offset = (int)(index / 2) * (h + h_span);
-        lv_obj_t *btn_auto_return = imgbtn_create(ui->working_cont_1, &_auto_back_RGB565A8_100x100,
-                                    "自动回仓", x_offset, y_offset, w, h);
-        lv_obj_add_event_cb(btn_auto_return, working_show_return_dialog, LV_EVENT_ALL, ui);
-        //设置
-        index++;
-        x_offset = (int)(index % 2) * (w + w_span);
-        y_offset = (int)(index / 2) * (h + h_span);
-        lv_obj_t *btn_setting = imgbtn_create(ui->working_cont_1, &_setting_RGB565A8_100x100, "设置",
-                                              x_offset, y_offset, w, h);
-        lv_obj_add_event_cb(btn_setting, working_to_setting, LV_EVENT_ALL, ui);
-        //定位
-        index++;
-        x_offset = (int)(index % 2) * (w + w_span);
-        y_offset = (int)(index / 2) * (h + h_span);
-        lv_obj_t *btn_position = imgbtn_create(ui->working_cont_1, &_location_RGB565A8_100x100, "定位",
-                                               x_offset, y_offset, w, h);
-        lv_obj_add_event_cb(btn_position, working_to_location, LV_EVENT_ALL, ui);
-
-        lv_obj_t *btn_pause = working_create_power_button(ui->working_cont_2, 0, 0, 146, 211);
-        lv_obj_add_event_cb(btn_pause, working_pause_clicked, LV_EVENT_ALL, ui);
-
-        lv_obj_t *btn_play = working_create_power_button(ui->working_cont_2, 0, 0, 146, 211);
-        lv_obj_add_event_cb(btn_play, working_play_clicked, LV_EVENT_ALL, ui);
-
-        working_bind_play_pause_buttons(btn_pause, btn_play);
-        //lv_obj_add_flag(btn_pause, LV_OBJ_FLAG_HIDDEN);
-
-        lv_obj_t *btn_plus = imgbtn_create(ui->working_cont_2, &_plus_RGB565A8_50x50, "", 171, 0, 92, 211);
-        lv_obj_add_event_cb(btn_plus, working_plus_clicked, LV_EVENT_ALL, ui);
-
-        lv_obj_t *btn_minus = imgbtn_create(ui->working_cont_2, &_minus_RGB565A8_50x50, "", 287, 0, 92,
-                                            211);
-        lv_obj_add_event_cb(btn_minus, working_minus_clicked, LV_EVENT_ALL, ui);
-
-        lv_obj_set_style_shadow_width(ui->working_cont_playing, 8, 0);
-        lv_obj_set_style_shadow_ofs_x(ui->working_cont_playing, 3, 0);
-        lv_obj_set_style_shadow_ofs_y(ui->working_cont_playing, 3, 0);
-        lv_obj_set_style_shadow_color(ui->working_cont_playing, lv_color_hex(0x000000), 0);
-        lv_obj_set_style_shadow_opa(ui->working_cont_playing, LV_OPA_40, 0);
-
-        lv_obj_set_style_shadow_width(ui->working_cont_pause, 8, 0);
-        lv_obj_set_style_shadow_ofs_x(ui->working_cont_pause, 3, 0);
-        lv_obj_set_style_shadow_ofs_y(ui->working_cont_pause, 3, 0);
-        lv_obj_set_style_shadow_color(ui->working_cont_pause, lv_color_hex(0x000000), 0);
-        lv_obj_set_style_shadow_opa(ui->working_cont_pause, LV_OPA_40, 0);
-
-
-        _is_working_page_initialized = true;
-    }
-
-    //让桶子处于暂停状态
     lv_obj_remove_flag(ui->working_cont_playing, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(ui->working_cont_pause, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_remove_flag(g_working_pause_btn, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(g_working_play_btn, LV_OBJ_FLAG_HIDDEN);
     bucket_working_sync_function_icons(ui);
-
+    SYSTEM_MANAGER_LOG_USER("LINK_DIAG system_manager_working_page_init leave");
 }

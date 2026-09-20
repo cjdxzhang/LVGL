@@ -32,6 +32,7 @@ extern char **environ;
 #define VOICE_SESSION_TIMEOUT_MS 25000u
 #define VOICE_AUDIO_QUEUE_CAPACITY 16u
 #define VOICE_ABANDON_AUDIO_PATH "/usr/share/voice/abandon.wav"
+#define VOICE_RX_HEX_CAPACITY (VOICE_READ_CAPACITY * 3u + 1u)
 
 typedef enum
 {
@@ -53,7 +54,7 @@ typedef struct
 {
     char data[VOICE_LINE_CAPACITY];
     size_t length;
-    bool discarding;
+    bool discarding; // 是否正在丢弃当前行（因为缓冲区溢出）
 } voice_line_parser_t;
 
 typedef struct
@@ -79,15 +80,14 @@ static const voice_command_descriptor_t g_voice_commands[] =
 {
     {VOICE_COMMAND_WAKEUP_ACK, "CMD_WAKEUP_ACK", "/usr/share/voice/wakeup_ack.wav", VOICE_GATE_NONE},
     {VOICE_COMMAND_SLEEP_ACK, "CMD_SLEEP_ACK", "/usr/share/voice/sleep_ack.wav", VOICE_GATE_AWAKE_ONLY},
-    {VOICE_COMMAND_FOOTBATH_START, "CMD_FOOTBATH_START", "/usr/share/voice/footbath_start.wav", VOICE_GATE_DETACHED},
+    {VOICE_COMMAND_FOOTBATH_START, "CMD_FOOTBATH_START", "/usr/share/voice/footbath_start.wav", VOICE_GATE_DOCKED},
+    {VOICE_COMMAND_FOOTBATH_CONTINUE, "CMD_FOOTBATH_CONTINUE", "/usr/share/voice/footbath_continue.wav", VOICE_GATE_DETACHED},
     {VOICE_COMMAND_FOOTBATH_STOP, "CMD_FOOTBATH_STOP", "/usr/share/voice/footbath_stop.wav", VOICE_GATE_DETACHED},
     {VOICE_COMMAND_MASSAGE_START, "CMD_MASSAGE_START", "/usr/share/voice/massage_start.wav", VOICE_GATE_DETACHED},
     {VOICE_COMMAND_MASSAGE_STOP, "CMD_MASSAGE_STOP", "/usr/share/voice/massage_stop.wav", VOICE_GATE_DETACHED},
     {VOICE_COMMAND_TEMP_UP, "CMD_TEMP_UP", "/usr/share/voice/temp_up.wav", VOICE_GATE_DETACHED},
     {VOICE_COMMAND_TEMP_DOWN, "CMD_TEMP_DOWN", "/usr/share/voice/temp_down.wav", VOICE_GATE_DETACHED},
     {VOICE_COMMAND_GO_HOME, "CMD_GO_HOME", NULL, VOICE_GATE_NONE},
-    {VOICE_COMMAND_DRY_START, "CMD_DRY_START", "/usr/share/voice/dry_start.wav", VOICE_GATE_DOCKED},
-    {VOICE_COMMAND_DRY_STOP, "CMD_DRY_STOP", "/usr/share/voice/dry_stop.wav", VOICE_GATE_DOCKED},
     {VOICE_COMMAND_CLEAN_START, "CMD_CLEAN_START", "/usr/share/voice/clean_start.wav", VOICE_GATE_DOCKED},
     {VOICE_COMMAND_CLEAN_STOP, "CMD_CLEAN_STOP", "/usr/share/voice/clean_stop.wav", VOICE_GATE_DOCKED},
     {VOICE_COMMAND_STOP_ALL, "CMD_STOP_ALL", "/usr/share/voice/stop_all.wav", VOICE_GATE_AWAKE_ONLY},
@@ -102,6 +102,8 @@ static voice_service_state_t g_voice =
     .uart_fd = -1,
     .player_pid = -1
 };
+
+static uint64_t g_voice_schedule_sequence;
 
 static bool voice_is_running(void)
 {
@@ -166,6 +168,29 @@ static bool voice_audio_enqueue(const char *path)
     pthread_cond_signal(&g_voice.audio_cond);
     pthread_mutex_unlock(&g_voice.lock);
     return true;
+}
+
+bool voice_command_service_play_prompt(voice_prompt_t prompt)
+{
+    const char *path;
+
+    switch (prompt)
+    {
+    case VOICE_PROMPT_FOOTBATH_FINISH:
+        path = "/usr/share/voice/footbath_finish.wav";
+        break;
+    case VOICE_PROMPT_CLEAN_FINISH:
+        path = "/usr/share/voice/clean_finish.wav";
+        break;
+    case VOICE_PROMPT_BAD_STATUS:
+        path = "/usr/share/voice/bad_status.wav";
+        break;
+    default:
+        VOICE_LOG_WARN("未知系统提示音: %d", (int)prompt);
+        return false;
+    }
+
+    return voice_audio_enqueue(path);
 }
 
 static int voice_play_file(const char *path)
@@ -324,6 +349,14 @@ static void voice_command_execute_async(void *user_data)
                        descriptor == NULL ? "<unknown>" : descriptor->text);
         return;
     }
+    if (system_mcu_link_state_get() != SYSTEM_MCU_LINK_ONLINE &&
+            command != VOICE_COMMAND_STOP_ALL)
+    {
+        VOICE_LOG_WARN("MCU链路非在线，拒绝语音业务命令: command=%s state=%d",
+                       descriptor->text, (int)system_mcu_link_state_get());
+        (void)voice_command_service_play_prompt(VOICE_PROMPT_BAD_STATUS);
+        return;
+    }
 
     decision = system_voice_command_execute(descriptor->command);
     if (decision.result == SYSTEM_COMMAND_ACCEPTED)
@@ -334,8 +367,8 @@ static void voice_command_execute_async(void *user_data)
     }
     else if (decision.result == SYSTEM_COMMAND_STATE_REJECTED)
     {
-        VOICE_LOG_WARN("语音命令被状态门禁拒绝: command=%s has_status=%d link=0x%02X domain=%s state=%s reason=%s",
-                       descriptor->text, has_mcu_status_report ? 1 : 0,
+        VOICE_LOG_WARN("语音命令被状态门禁拒绝: command=%s mcu_link_state=%d link=0x%02X domain=%s state=%s reason=%s",
+                       descriptor->text, (int)system_mcu_link_state_get(),
                        (unsigned int)last_link_status,
                        decision.domain, decision.state, decision.reason);
         (void)voice_audio_enqueue(VOICE_ABANDON_AUDIO_PATH);
@@ -351,16 +384,43 @@ static void voice_command_execute_async(void *user_data)
 
 static void voice_schedule_command(voice_command_t command)
 {
+    uint64_t sequence;
+
     if (command == VOICE_COMMAND_UNKNOWN)
     {
         VOICE_LOG_WARN("收到未知语音文本");
         return;
     }
+    sequence = ++g_voice_schedule_sequence;
+    VOICE_LOG_USER("投递语音命令: sequence=%llu command=%d",
+                   (unsigned long long)sequence, (int)command);
     if (lv_async_call(voice_command_execute_async,
                       (void *)(uintptr_t)command) != LV_RESULT_OK)
     {
         VOICE_LOG_ERROR("投递语音命令到 LVGL 线程失败: command=%d", command);
     }
+}
+
+static void voice_log_uart_rx(const uint8_t *data, size_t length)
+{
+    char hex[VOICE_RX_HEX_CAPACITY];
+    size_t index;
+    size_t offset = 0u;
+
+    for (index = 0u; index < length && offset < sizeof(hex); index++)
+    {
+        int written = snprintf(hex + offset, sizeof(hex) - offset,
+                               "%02X%s", data[index],
+                               index + 1u < length ? " " : "");
+
+        if (written < 0 || (size_t)written >= sizeof(hex) - offset)
+        {
+            break;
+        }
+        offset += (size_t)written;
+    }
+    hex[offset] = '\0';
+    VOICE_LOG_USER("ttyS1 RX: len=%zu data=%s", length, hex);
 }
 
 static void voice_handle_line(voice_line_parser_t *parser)
@@ -382,6 +442,7 @@ static void voice_handle_line(voice_line_parser_t *parser)
         VOICE_LOG_WARN("忽略未知语音文本: %s", parser->data);
         return;
     }
+    VOICE_LOG_USER("解析语音文本: %s", parser->data);
     voice_schedule_command(command);
 }
 
@@ -509,6 +570,7 @@ static void *voice_uart_thread_main(void *user_data)
 
             if (received > 0)
             {
+                voice_log_uart_rx(buffer, (size_t)received);
                 voice_parser_feed(&parser, buffer, (size_t)received);
                 continue;
             }
@@ -550,6 +612,7 @@ int voice_command_service_init(void)
     g_voice.awake = false;
     g_voice.audio_head = 0u;
     g_voice.audio_count = 0u;
+    g_voice_schedule_sequence = 0u;
     pthread_mutex_unlock(&g_voice.lock);
 
     result = pthread_create(&g_voice.audio_thread, NULL,

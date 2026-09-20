@@ -39,6 +39,8 @@ uint32_t serial_mcu_status_report_sequence(
     void);            // 校验通过的 MCU 状态帧累计序号
 uint8_t serial_mcu_liquid_shortage_mask(void);               // 最近合法帧 data[25] Bit0-Bit2
 bool serial_mcu_error_state_get(serial_mcu_error_state_t *state);
+/* 最近有效MCU电量百分比，开机默认100，非法值和断连保留最近值。 */
+uint8_t serial_mcu_battery_percent(void);
 
 // ========== 桶体命令 (0xA0-0xA9)：每次调用只发送一次 ==========
 void serial_bucket_shutdown(void);       // 0xA0 桶体关机

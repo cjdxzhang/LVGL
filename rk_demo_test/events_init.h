@@ -29,6 +29,7 @@ void events_init_conf_wifi(lv_ui *ui);
 void events_init_conf_other(lv_ui *ui);
 void events_init_conf_location(lv_ui *ui);
 void preparing_stop_button_set_hidden(bool hidden);
+void mode_station_dialog_refresh(lv_ui *ui);
 
 #ifdef __cplusplus
 }
